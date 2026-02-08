@@ -67,11 +67,11 @@ if st.button('🚀 오늘의 매매 신호 분석 (Click)'):
             # === 보유 중일 때 (매도 조건 체크) ===
             st.markdown("#### 🛑 매도(청산) 신호 점검")
             
-            # 1. 상승장 전략 청산 (이격도 100 미만)
+            # 조건 1: 상승장 전략 청산 (이격도 100 미만)
             if k_disp < 100:
-                st.error(f"🚨 [상승장 전략 매도] 이격도가 100 미만({k_disp})입니다. 추세가 끝났습니다.")
+                st.warning(f"🚨 [상승장 전략 매도] 이격도가 100 미만({k_disp})입니다. 추세가 끝났습니다.")
             
-            # 2. 하락장 전략 청산 (익절 98 이상 OR 손절 85 미만)
+            # 조건 2: 하락장 전략 청산 (익절 98 이상 OR 손절 85 미만)
             elif k_disp >= 98:
                 st.warning(f"💰 [하락장 전략 익절] 이격도 98 이상({k_disp}) 도달! 수익 실현하세요.")
             elif k_disp < 85:
@@ -93,5 +93,54 @@ if st.button('🚀 오늘의 매매 신호 분석 (Click)'):
             
             if buy_bull:
                 st.success("🔥 [강력 매수] 상승장 진입 조건 만족! (이격도 104↑ & 60일선 상승)")
-            elif buy;
+            elif buy_bear:
+                st.info("✨ [저점 매수] 하락장 과매도 구간 진입! (이격도 95↓)")
+            else:
+                st.markdown("💤 **[관망]** 진입 조건에 맞지 않습니다.")
 
+
+    st.markdown("---")
+
+
+    # =========================================================
+    # 2. KODEX 코스닥150 레버리지 (하락장 전용 전략)
+    # =========================================================
+    q_data = get_market_status(TICKER_KOSDAQ)
+    
+    if q_data is not None:
+        q_disp = round(q_data['Disparity'], 2)
+        q_close = format(int(q_data['Close']), ",")
+        
+        st.subheader(f"2. 코스닥150 레버리지 (현재가: {q_close}원)")
+        
+        # 지표 표시
+        col3, col4 = st.columns(2)
+        col3.metric("현재 이격도(60일)", f"{q_disp}%", delta="진입기준: 90↓")
+        
+        # [논리 판별]
+        if has_kosdaq:
+            # === 보유 중일 때 (매도 조건 체크) ===
+            st.markdown("#### 🛑 매도(청산) 신호 점검")
+            
+            # 조건: 익절 97 이상 OR 손절 80 미만
+            sell_q_profit = q_disp >= 97
+            sell_q_loss = q_disp < 80
+            
+            if sell_q_profit:
+                st.warning(f"💰 [익절 신호] 이격도 97 이상({q_disp}) 도달! 수익 실현하세요.")
+            elif sell_q_loss:
+                st.error(f"🩸 [손절 신호] 이격도 80 미만({q_disp}) 붕괴! 위험 관리하세요.")
+            else:
+                st.success("✅ [보유 지속] 목표가(97) 대기 중. (손절선 80)")
+                
+        else:
+            # === 미보유 중일 때 (매수 조건 체크) ===
+            st.markdown("#### ⚡ 매수(진입) 신호 점검")
+            
+            # 조건: 이격도 90 미만
+            buy_q = q_disp < 90
+            
+            if buy_q:
+                st.info("✨ [저점 매수] 코스닥 과매도 구간 진입! (이격도 90↓)")
+            else:
+                st.markdown("💤 **[관망]** 아직 충분히 싸지 않습니다.")
