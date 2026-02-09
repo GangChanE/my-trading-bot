@@ -86,13 +86,17 @@ if st.button('🚀 오늘의 매매 신호 분석 (Click)'):
             # === 미보유 중일 때 (매수 조건 체크) ===
             st.markdown("#### ⚡ 매수(진입) 신호 점검")
             
-            # 조건 1: 상승장 진입 (이격도 104 이상 AND 추세 상승)
-            buy_bull = (k_disp >= 104) and k_trend
-            # 조건 2: 하락장 진입 (이격도 95 미만)
+            # [수정된 전략] 과열 방지 필터 추가 (120% 이상이면 진입 금지)
+            buy_bull = (k_disp >= 104) and (k_disp <= 120) and k_trend
+            
+            # 하락장 진입 조건은 그대로
             buy_bear = k_disp < 95
             
             if buy_bull:
-                st.success("🔥 [강력 매수] 상승장 진입 조건 만족! (이격도 104↑ & 60일선 상승)")
+                st.success(f"🔥 [강력 매수] 상승장 진입 적기! (이격도 {k_disp}% : 104~120 구간)")
+            elif k_disp > 120 and k_trend:
+                # 추세는 좋지만 너무 비싼 경우
+                st.warning(f"⛔ [진입 보류] 추세는 좋지만 과열 상태입니다. (이격도 {k_disp}% > 120%) 눌림목을 기다리세요.")
             elif buy_bear:
                 st.info("✨ [저점 매수] 하락장 과매도 구간 진입! (이격도 95↓)")
             else:
