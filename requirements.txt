@@ -1,3 +1,5 @@
 streamlit
-finance-datareader
+requests
 pandas
+numpy
+scipy
