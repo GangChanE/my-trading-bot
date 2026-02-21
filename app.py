@@ -1,153 +1,124 @@
 import streamlit as st
-import FinanceDataReader as fdr
+import requests
 import pandas as pd
-import datetime
+import numpy as np
+from scipy.stats import linregress
+from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
 
-# --- [미스터 주's 트레이딩 시스템 설정] ---
-st.set_page_config(page_title="미스터 주 트레이딩 시스템", layout="wide")
+# ==========================================
+# ⚙️ 1. 웹페이지 기본 설정 및 파라미터
+# ==========================================
+st.set_page_config(page_title="All-Weather Beast 알리미", page_icon="🦁", layout="centered")
 
-# 종목 코드 설정
-TICKER_KOSPI = '122630'  # KODEX 레버리지
-TICKER_KOSDAQ = '233740' # KODEX 코스닥150레버리지
+WINDOW = 60
+MA_FILTER = 120
 
-# 데이터 조회 기간 (1년치)
-today = datetime.date.today()
-start_date = today - datetime.timedelta(days=365)
+TARGETS = [
+    {'name': 'KODEX 은선물(H)',   'tk': '144600.KS', 'ent': 1.7, 'ext': 0.3},
+    {'name': 'TIGER 200 중공업',  'tk': '139230.KS', 'ent': 2.7, 'ext': -0.5},
+    {'name': 'KODEX 보험',        'tk': '140700.KS', 'ent': 2.3, 'ext': 1.5},
+    {'name': 'TIGER 헬스케어',    'tk': '143860.KS', 'ent': 2.1, 'ext': 0.7}
+]
+PARKING_NDX = {'name': 'TIGER 미국나스닥100', 'tk': '133690.KS'}
 
-# [함수] 데이터 수집 및 지표 계산
-def get_market_status(ticker):
+# 캐싱을 통해 웹 새로고침 시 반복적인 야후 데이터 요청 방지
+@st.cache_data(ttl=3600) 
+def get_data(ticker):
     try:
-        # 데이터 가져오기
-        df = fdr.DataReader(ticker, start_date)
-        
-        # 60일 이동평균선 계산
-        df['MA60'] = df['Close'].rolling(window=60).mean()
-        
-        # 60일 이격도 계산 ((종가 / 60이평) * 100)
-        df['Disparity'] = (df['Close'] / df['MA60']) * 100
-        
-        # 상승 추세 여부 (어제 60이평 < 오늘 60이평)
-        df['Trend_Up'] = df['MA60'] > df['MA60'].shift(1)
-        
-        return df.iloc[-1] # 오늘자 데이터 반환
-    except Exception as e:
-        return None
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1y"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=5).json()
+        closes = resp['chart']['result'][0]['indicators']['quote'][0]['close']
+        df = pd.DataFrame({'Close': closes}, index=pd.to_datetime(resp['chart']['result'][0]['timestamp'], unit='s'))
+        return df['Close'].dropna()
+    except: 
+        return pd.Series(dtype=float)
 
-# --- [앱 화면 구성] ---
-st.title(f"📊 미스터 주: 트레이딩 시그널 ({today.strftime('%Y-%m-%d')})")
+# ==========================================
+# 🚀 2. 웹 UI 구성 및 데이터 분석
+# ==========================================
+st.title("🦁 All-Weather Beast 실전 알리미")
+st.write(f"**기준일:** {datetime.now().strftime('%Y-%m-%d')} | **실행 시간:** 내일 아침 09:05")
 st.markdown("---")
 
-# 사이드바: 보유 상태 체크
-st.sidebar.header("내 계좌 보유 현황")
-has_kospi = st.sidebar.checkbox('KODEX 레버리지 보유 중', value=False)
-has_kosdaq = st.sidebar.checkbox('코스닥150 레버리지 보유 중', value=False)
+# 분석 진행 상태 표시
+with st.spinner("야후 파이낸스에서 최신 데이터를 불러와 시그널을 분석 중입니다..."):
+    results = []
+    buy_list = []
+    sell_list = []
 
-# 버튼 클릭 시 분석 시작
-if st.button('🚀 오늘의 매매 신호 분석 (Click)'):
+    # 야수 종목 분석
+    for t in TARGETS:
+        series = get_data(t['tk'])
+        if len(series) < MA_FILTER:
+            continue
 
-    # =========================================================
-    # 1. KODEX 레버리지 (상승장 & 하락장 혼합 전략)
-    # =========================================================
-    k_data = get_market_status(TICKER_KOSPI)
-    
-    if k_data is not None:
-        k_disp = round(k_data['Disparity'], 2) # 이격도
-        k_trend = k_data['Trend_Up']           # 추세(True/False)
-        k_close = format(int(k_data['Close']), ",")
-        
-        st.subheader(f"1. KODEX 레버리지 (현재가: {k_close}원)")
-        
-        # 지표 표시
-        col1, col2 = st.columns(2)
-        col1.metric("현재 이격도(60일)", f"{k_disp}%", delta="진입: 104~120 구간")
-        col2.metric("60일선 추세", "상승중 📈" if k_trend else "하락/횡보 📉")
+        curr_price = series.iloc[-1]
+        ma120 = series.rolling(window=MA_FILTER).mean().iloc[-1]
+        is_trend_up = curr_price >= ma120
+        trend_icon = "🟢 상승" if is_trend_up else "🔴 하락"
 
-        # [논리 판별]
-        if has_kospi:
-            # === 보유 중일 때 (매도 조건 체크) ===
-            st.markdown("#### 🛑 매도(청산) 신호 점검")
-            
-            # 1. 상승장 전략 청산 (이격도 100 미만)
-            if k_disp < 100:
-                st.warning(f"🚨 [상승장 전략 매도] 이격도가 100 미만({k_disp})입니다. 추세가 끝났습니다.")
-            
-            # 2. 하락장 전략 청산 (익절 98 이상 OR 손절 85 미만)
-            elif k_disp >= 98:
-                st.warning(f"💰 [하락장 전략 익절] 이격도 98 이상({k_disp}) 도달! 수익 실현하세요.")
-            elif k_disp < 85:
-                st.error(f"🩸 [하락장 전략 손절] 이격도 85 미만({k_disp}) 붕괴! 즉시 손절하세요.")
-            
-            # 홀딩 메시지
-            else:
-                st.success("✅ [보유 지속] 매도 신호가 없습니다. 계속 보유하세요.")
-                st.caption("💡 본인이 진입한 전략(상승/하락)에 맞는 신호를 따르세요.")
+        y = series.values[-WINDOW:]
+        x = np.arange(WINDOW)
+        res = linregress(x, y)
+        D = np.std(y - (res.slope*x + res.intercept))
+        current_sigma = 0 if D == 0 else (curr_price - (res.slope * (WINDOW-1) + res.intercept)) / D
 
+        action = ""
+        # 로직 판별
+        if is_trend_up and res.slope > 0 and current_sigma <= -t['ent']:
+            action = "🔥 신규 매수 (과매도 진입)"
+            buy_list.append(t['name'])
+        elif not is_trend_up:
+            action = "🚨 전량 매도 (120일선 이탈 손절)"
+            sell_list.append(t['name'])
+        elif current_sigma >= t['ext']:
+            action = "💰 전량 매도 (목표가 익절)"
+            sell_list.append(t['name'])
         else:
-            # === 미보유 중일 때 (매수 조건 체크) ===
-            st.markdown("#### ⚡ 매수(진입) 신호 점검")
-            
-            # [핵심 수정] 과열 방지 필터 적용 (120% 넘으면 진입 금지)
-            is_overheated = k_disp > 120
-            
-            # 조건 1: 상승장 진입 (이격도 104 이상 120 이하 AND 추세 상승)
-            buy_bull = (k_disp >= 104) and (not is_overheated) and k_trend
-            
-            # 조건 2: 하락장 진입 (이격도 95 미만)
-            buy_bear = k_disp < 95
-            
-            if buy_bull:
-                st.success(f"🔥 [강력 매수] 상승장 진입 적기! (이격도 {k_disp}% : 104~120 구간)")
-            elif is_overheated and k_trend:
-                # 추세는 좋지만 너무 비싼 경우 (안전장치 발동)
-                st.warning(f"⛔ [진입 보류] 과열 상태입니다! (이격도 {k_disp}% > 120%) 110% 부근까지 눌림목을 기다리세요.")
-            elif buy_bear:
-                st.info("✨ [저점 매수] 하락장 과매도 구간 진입! (이격도 95↓)")
-            else:
-                st.markdown("💤 **[관망]** 진입 조건에 맞지 않습니다.")
+            action = "👌 보유 또는 대기"
 
+        results.append({
+            "종목명": t['name'],
+            "현재가": f"{curr_price:,.0f}",
+            "120일선": f"{ma120:,.0f}",
+            "추세": trend_icon,
+            "Sigma": f"{current_sigma:.2f}",
+            "상태/액션": action
+        })
 
-    st.markdown("---")
+    # 파킹 자산 분석
+    ndx_series = get_data(PARKING_NDX['tk'])
+    ndx_price = ndx_series.iloc[-1]
+    ndx_ma120 = ndx_series.rolling(window=MA_FILTER).mean().iloc[-1]
+    ndx_trend = "🟢 상승 (나스닥 파킹)" if ndx_price >= ndx_ma120 else "🔴 하락 (완전 현금 파킹)"
 
+# ==========================================
+# 📊 3. 화면 출력 (테이블 및 액션 플랜)
+# ==========================================
+st.subheader("📊 야수 종목 시그널 현황")
+# 데이터프레임으로 변환하여 웹에 예쁜 표로 출력
+df_results = pd.DataFrame(results)
+st.dataframe(df_results, use_container_width=True, hide_index=True)
 
-    # =========================================================
-    # 2. KODEX 코스닥150 레버리지 (하락장 전용 전략)
-    # =========================================================
-    q_data = get_market_status(TICKER_KOSDAQ)
+st.subheader("🛡️ 파킹 자산 상태")
+st.info(f"**{PARKING_NDX['name']}** | 현재가: {ndx_price:,.0f} | 120일선: {ndx_ma120:,.0f} | **상태: {ndx_trend}**")
+
+st.markdown("---")
+st.subheader("📝 내일 아침 09:05 실행 가이드")
+
+if buy_list or sell_list:
+    if sell_list:
+        st.error(f"1️⃣ 보유 중인 **{', '.join(sell_list)}** 종목이 있다면 전량 매도(청산) 하세요.")
+    if buy_list:
+        st.success(f"2️⃣ 매도 대금 및 파킹 자금을 모아 **{', '.join(buy_list)}** 종목을 1/N로 나누어 매수하세요.")
     
-    if q_data is not None:
-        q_disp = round(q_data['Disparity'], 2)
-        q_close = format(int(q_data['Close']), ",")
-        
-        st.subheader(f"2. 코스닥150 레버리지 (현재가: {q_close}원)")
-        
-        # 지표 표시
-        col3, col4 = st.columns(2)
-        col3.metric("현재 이격도(60일)", f"{q_disp}%", delta="진입기준: 90↓")
-        
-        # [논리 판별]
-        if has_kosdaq:
-            # === 보유 중일 때 (매도 조건 체크) ===
-            st.markdown("#### 🛑 매도(청산) 신호 점검")
-            
-            # 조건: 익절 97 이상 OR 손절 80 미만
-            sell_q_profit = q_disp >= 97
-            sell_q_loss = q_disp < 80
-            
-            if sell_q_profit:
-                st.warning(f"💰 [익절 신호] 이격도 97 이상({q_disp}) 도달! 수익 실현하세요.")
-            elif sell_q_loss:
-                st.error(f"🩸 [손절 신호] 이격도 80 미만({q_disp}) 붕괴! 위험 관리하세요.")
-            else:
-                st.success("✅ [보유 지속] 목표가(97) 대기 중. (손절선 80)")
-                
-        else:
-            # === 미보유 중일 때 (매수 조건 체크) ===
-            st.markdown("#### ⚡ 매수(진입) 신호 점검")
-            
-            # 조건: 이격도 90 미만
-            buy_q = q_disp < 90
-            
-            if buy_q:
-                st.info("✨ [저점 매수] 코스닥 과매도 구간 진입! (이격도 90↓)")
-            else:
-                st.markdown("💤 **[관망]** 아직 충분히 싸지 않습니다.")
+    parking_action = ndx_trend.split('(')[1].replace(')','')
+    st.warning(f"3️⃣ 매수 후 남는 현금이 있다면, 현재 장세에 따라 **[{parking_action}]** 하세요.")
+else:
+    parking_action = ndx_trend.split('(')[1].replace(')','')
+    st.success(f"▶️ 포트폴리오 비중 변화 없음. 남는 현금은 **[{parking_action}]** 상태를 유지하세요.")
+
+st.caption("※ 매매 체결은 장 시작 직후 호가 스프레드가 안정화되는 오전 9시 5분경에 진행하는 것을 권장합니다.")
