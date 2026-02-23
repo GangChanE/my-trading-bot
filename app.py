@@ -8,14 +8,14 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# ⚙️ 1. [Final Masterpiece] 5대 야수 & FANG+ 파킹 설정
+# ⚙️ 1. [End Game] 6대 야수 & FANG+ 파킹
 # ==========================================
-st.set_page_config(page_title="All-Weather Beast : Masterpiece", page_icon="🦁", layout="centered")
+st.set_page_config(page_title="All-Weather Beast : 6-Squad", page_icon="🦁", layout="centered")
 
 WINDOW = 60
 MA_FILTER = 120
 
-# 🦁 최강의 5대 야수 라인업 (최종 최적화 파라미터 적용)
+# 🦁 최강의 6대 야수 라인업
 TARGETS = [
     # 1. 인플레이션 방어 (원자재)
     {'name': 'KODEX 은선물(H)',   'tk': '144600.KS', 'ent': 1.7, 'ext': 0.3},
@@ -25,7 +25,9 @@ TARGETS = [
     {'name': 'KODEX 보험',        'tk': '140700.KS', 'ent': 2.3, 'ext': 1.5},
     # 4. 개별 성장 & 바이오 (성장주)
     {'name': 'TIGER 헬스케어',    'tk': '143860.KS', 'ent': 2.1, 'ext': 0.7},
-    # 5. 필수 소비재 & 수출 (스나이퍼 모드: 진입 -3.4)
+    # 5. 엔터테인먼트 & 흥행 (우연히 발견한 에이스)
+    {'name': 'HANARO Fn K-POP',   'tk': '395290.KS', 'ent': 1.6, 'ext': 1.3},
+    # 6. 필수 소비재 & 수출 (스나이퍼 모드: 진입 -3.4)
     {'name': 'HANARO Fn K-푸드',  'tk': '426030.KS', 'ent': 3.4, 'ext': 1.9}
 ]
 
@@ -48,11 +50,11 @@ def get_data(ticker):
 # 🚀 2. 데이터 분석 및 시그널 판별
 # ==========================================
 st.title("🦁 All-Weather Beast")
-st.caption("The Masterpiece : 5 Beasts & FANG+ Strategy")
+st.caption("The 6-Squad Edition: FANG+ Super Parking")
 st.write(f"**기준일:** {datetime.now().strftime('%Y-%m-%d')} | **실행:** 내일 아침 09:05")
 st.markdown("---")
 
-with st.spinner("야수들과 FANG+의 동태를 정밀 분석 중입니다..."):
+with st.spinner("6마리 야수들과 FANG+의 동태를 분석 중입니다..."):
     results = []
     buy_list = []
     sell_list = []
@@ -115,7 +117,7 @@ with st.spinner("야수들과 FANG+의 동태를 정밀 분석 중입니다...")
 # ==========================================
 # 📊 3. 웹 UI 출력
 # ==========================================
-st.subheader("📊 5대 야수 시그널")
+st.subheader("📊 6대 야수 시그널")
 df_results = pd.DataFrame(results)
 
 # 스타일링
@@ -142,4 +144,4 @@ else:
     st.success(f"▶️ 포트폴리오 변경 없음. 남는 현금은 **[{park_action}]** 상태를 유지하세요.")
 
 st.markdown("---")
-st.caption("Final Strategy V2.0 | 5 Beasts + FANG Parking | 120-Day Stop Loss Enabled")
+st.caption("Final Strategy V3.0 | 6 Beasts + FANG Parking | 120-Day Stop Loss Enabled")
