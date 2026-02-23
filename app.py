@@ -8,14 +8,14 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# ⚙️ 1. [End Game] 6대 야수 & FANG+ 파킹
+# ⚙️ 1. [Final] 5대 야수 & 미국빅테크 파킹
 # ==========================================
-st.set_page_config(page_title="All-Weather Beast : 6-Squad", page_icon="🦁", layout="centered")
+st.set_page_config(page_title="All-Weather Beast", page_icon="🦁", layout="centered")
 
 WINDOW = 60
 MA_FILTER = 120
 
-# 🦁 최강의 6대 야수 라인업
+# 🦁 최강의 5대 야수 라인업 (K-POP 포함)
 TARGETS = [
     # 1. 인플레이션 방어 (원자재)
     {'name': 'KODEX 은선물(H)',   'tk': '144600.KS', 'ent': 1.7, 'ext': 0.3},
@@ -23,16 +23,14 @@ TARGETS = [
     {'name': 'TIGER 200 중공업',  'tk': '139230.KS', 'ent': 2.7, 'ext': -0.5},
     # 3. 금리 인상 수혜 (금융)
     {'name': 'KODEX 보험',        'tk': '140700.KS', 'ent': 2.3, 'ext': 1.5},
-    # 4. 개별 성장 & 바이오 (성장주)
+    # 4. 개별 성장 & 바이오 (성장주 - 에이스)
     {'name': 'TIGER 헬스케어',    'tk': '143860.KS', 'ent': 2.1, 'ext': 0.7},
-    # 5. 엔터테인먼트 & 흥행 (우연히 발견한 에이스)
-    {'name': 'HANARO Fn K-POP',   'tk': '395290.KS', 'ent': 1.6, 'ext': 1.3},
-    # 6. 필수 소비재 & 수출 (스나이퍼 모드: 진입 -3.4)
-    {'name': 'HANARO Fn K-푸드',  'tk': '426030.KS', 'ent': 3.4, 'ext': 1.9}
+    # 5. 엔터테인먼트 (독립 야수 - K-POP)
+    {'name': 'HANARO Fn K-POP',   'tk': '395290.KS', 'ent': 1.6, 'ext': 1.3}
 ]
 
-# 🏎️ 슈퍼 파킹 자산 (FANG플러스: 나스닥 상위 호환)
-PARKING_ASSET = {'name': 'KODEX 미국FANG플러스(H)', 'tk': '314250.KS'}
+# 🏎️ 슈퍼 파킹 자산 (미국빅테크10)
+PARKING_ASSET = {'name': 'KODEX 미국빅테크10(H)', 'tk': '314250.KS'}
 
 @st.cache_data(ttl=3600) 
 def get_data(ticker):
@@ -50,11 +48,11 @@ def get_data(ticker):
 # 🚀 2. 데이터 분석 및 시그널 판별
 # ==========================================
 st.title("🦁 All-Weather Beast")
-st.caption("The 6-Squad Edition: FANG+ Super Parking")
+st.caption("Strategy: 5 Beasts + BigTech10 Parking")
 st.write(f"**기준일:** {datetime.now().strftime('%Y-%m-%d')} | **실행:** 내일 아침 09:05")
 st.markdown("---")
 
-with st.spinner("6마리 야수들과 FANG+의 동태를 분석 중입니다..."):
+with st.spinner("야수들과 빅테크의 동태를 분석 중입니다..."):
     results = []
     buy_list = []
     sell_list = []
@@ -101,15 +99,15 @@ with st.spinner("6마리 야수들과 FANG+의 동태를 분석 중입니다..."
             "판단": action
         })
 
-    # --- 2. 슈퍼 파킹 자산 (FANG+) 분석 ---
+    # --- 2. 슈퍼 파킹 자산 (미국빅테크10) 분석 ---
     park_series = get_data(PARKING_ASSET['tk'])
     park_price = park_series.iloc[-1]
     park_ma120 = park_series.rolling(window=MA_FILTER).mean().iloc[-1]
     
     # 파킹 로직: 120일선 위면 매수, 아니면 현금
     if park_price >= park_ma120:
-        park_status = "🟢 상승 (FANG+ 매수/보유)"
-        park_action = "FANG플러스 전량 매수/보유"
+        park_status = "🟢 상승 (빅테크 매수/보유)"
+        park_action = "미국빅테크10 전량 매수/보유"
     else:
         park_status = "🔴 하락 (전량 현금 보유)"
         park_action = "전량 현금 보유 (Risk Off)"
@@ -117,7 +115,7 @@ with st.spinner("6마리 야수들과 FANG+의 동태를 분석 중입니다..."
 # ==========================================
 # 📊 3. 웹 UI 출력
 # ==========================================
-st.subheader("📊 6대 야수 시그널")
+st.subheader("📊 5대 야수 시그널")
 df_results = pd.DataFrame(results)
 
 # 스타일링
@@ -127,7 +125,7 @@ def color_trend(val):
 
 st.dataframe(df_results.style.applymap(color_trend, subset=['추세']), use_container_width=True, hide_index=True)
 
-st.subheader("🏎️ 슈퍼 파킹 자산 (FANG+)")
+st.subheader("🏎️ 슈퍼 파킹 자산 (미국빅테크10)")
 st.info(f"**{PARKING_ASSET['name']}** | 현재가: {park_price:,.0f} | 120일선: {park_ma120:,.0f} | **상태: {park_status}**")
 
 st.markdown("---")
@@ -144,4 +142,4 @@ else:
     st.success(f"▶️ 포트폴리오 변경 없음. 남는 현금은 **[{park_action}]** 상태를 유지하세요.")
 
 st.markdown("---")
-st.caption("Final Strategy V3.0 | 6 Beasts + FANG Parking | 120-Day Stop Loss Enabled")
+st.caption("Final Strategy: 5 Beasts + BigTech Parking | 120-Day Stop Loss Enabled")
