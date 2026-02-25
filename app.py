@@ -121,16 +121,21 @@ with st.spinner("야수, 빅테크, 그리고 계절을 분석 중입니다...")
         season_asset = SEASONAL_SUMMER
         
     # 파킹 로직 판단
-    if park_price >= park_ma120:
+    is_bigtech_bull = park_price >= park_ma120
+
+    if is_bigtech_bull:
         # 빅테크가 상승세면 무조건 빅테크
         final_park_name = MAIN_PARKING['name']
         final_park_status = "🟢 빅테크 보유 (Risk On)"
         final_park_action = f"**{MAIN_PARKING['name']}** 매수/보유"
+        park_delta = park_price - park_ma120 # 양수 (초록)
     else:
         # 빅테크 하락세면 -> 계절성 자산으로 피신
         final_park_name = f"{season_asset['name']} ({season_name})"
         final_park_status = "🛡️ 계절성 파킹 (Risk Off)"
         final_park_action = f"빅테크 전량 매도 후 **{season_asset['name']}** 매수/보유"
+        # [수정됨] 하락장이면 delta를 음수로 강제 변환
+        park_delta = -(park_ma120 - park_price) # 음수 (빨강)
 
 # ==========================================
 # 📊 3. 웹 UI 출력
@@ -150,8 +155,13 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("🏎️ 메인 엔진 (Big Tech)")
-    st.metric(label=MAIN_PARKING['name'], value=f"{park_price:,.0f} 원", delta=f"120일선 대비 {park_price-park_ma120:,.0f}")
-    st.caption(f"120일선: {park_ma120:,.0f} | 상태: {'상승장' if park_price >= park_ma120 else '하락장'}")
+    # [수정됨] delta 값에 따라 색상과 화살표가 자동으로 바뀝니다.
+    st.metric(
+        label=MAIN_PARKING['name'], 
+        value=f"{park_price:,.0f} 원", 
+        delta=f"{park_delta:,.0f} (120일선 대비)"
+    )
+    st.caption(f"120일선: {park_ma120:,.0f} | 상태: {'상승장' if is_bigtech_bull else '하락장'}")
 
 with col2:
     st.subheader("🛡️ 비상 대피소 (Season)")
