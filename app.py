@@ -8,14 +8,14 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# ⚙️ 1. [Final] 5대 야수 & 미국빅테크10 설정
+# ⚙️ 1. [End Game] 5대 야수 & 계절성 파킹
 # ==========================================
-st.set_page_config(page_title="All-Weather Beast", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="All-Weather Beast V5.0", page_icon="🦁", layout="wide")
 
 WINDOW = 60
 MA_FILTER = 120
 
-# 🦁 5대 야수 (K-POP 포함 확정)
+# 🦁 5대 야수
 TARGETS = [
     {'name': 'KODEX 은선물(H)',   'tk': '144600.KS', 'ent': 1.7, 'ext': 0.3},
     {'name': 'TIGER 200 중공업',  'tk': '139230.KS', 'ent': 2.7, 'ext': -0.5},
@@ -24,7 +24,12 @@ TARGETS = [
     {'name': 'HANARO Fn K-POP',   'tk': '395290.KS', 'ent': 1.6, 'ext': 1.3}
 ]
 
-PARKING_ASSET = {'name': 'KODEX 미국빅테크10(H)', 'tk': '314250.KS'}
+# 🏎️ 메인 파킹 (1순위)
+MAIN_PARKING = {'name': 'KODEX 미국빅테크10(H)', 'tk': '314250.KS'}
+
+# 🍂❄️ 계절성 파킹 (2순위: Risk Off 대피소)
+SEASONAL_WINTER = {'name': 'KODEX 코스닥150',   'tk': '229200.KS'} # 11~4월 (1배수)
+SEASONAL_SUMMER = {'name': 'KOSEF 미국달러선물', 'tk': '138230.KS'} # 5~10월 (1배수)
 
 @st.cache_data(ttl=3600) 
 def get_data(ticker):
@@ -41,23 +46,22 @@ def get_data(ticker):
         return pd.Series(dtype=float)
 
 # ==========================================
-# 🚀 2. 데이터 분석 및 목표가 계산
+# 🚀 2. 데이터 분석 및 시그널 판별
 # ==========================================
-st.title("🦁 All-Weather Beast V4.0")
-st.caption("Strategy: 5 Beasts + BigTech10 Parking | Market Open Exit")
-st.write(f"**기준일:** {datetime.now().strftime('%Y-%m-%d')} | **실행:** 매일 장 마감 후 확인 -> 다음날 아침 09:00 매매")
+st.title("🦁 All-Weather Beast V5.0")
+st.caption("Strategy: 5 Beasts + BigTech + Seasonal Cash Parking")
+st.write(f"**기준일:** {datetime.now().strftime('%Y-%m-%d')} | **실행:** 장 마감 후 확인 -> 익일 시가 매매")
 st.markdown("---")
 
-with st.spinner("야수들의 목표가를 정밀 계산 중입니다..."):
+with st.spinner("야수, 빅테크, 그리고 계절을 분석 중입니다..."):
     results = []
     buy_list = []
     sell_list = []
     
-    # --- 1. 야수 종목 분석 ---
+    # --- A. 야수 종목 분석 ---
     for t in TARGETS:
         series = get_data(t['tk'])
-        if len(series) < MA_FILTER:
-            continue
+        if len(series) < MA_FILTER: continue
 
         curr_price = series.iloc[-1]
         ma120 = series.rolling(window=MA_FILTER).mean().iloc[-1]
@@ -68,28 +72,22 @@ with st.spinner("야수들의 목표가를 정밀 계산 중입니다..."):
         x = np.arange(WINDOW)
         res = linregress(x, y)
         
-        # 추세선(L)과 표준편차(D)
         L = res.slope * (WINDOW-1) + res.intercept
         D = np.std(y - (res.slope*x + res.intercept))
-        
         current_sigma = 0 if D == 0 else (curr_price - L) / D
 
-        # 🎯 목표가 계산 (Price = L + Sigma * D)
-        # 1. 진입 목표가 (Buy Target)
+        # 목표가 계산
         buy_target_price = L + (-t['ent'] * D)
-        # 2. 청산 목표가 (Sell Target)
         sell_target_price = L + (t['ext'] * D)
 
         action = ""
-        # [매수] 120일선 위 & 기울기 양수 & 과매도 진입
+        # 로직
         if is_trend_up and res.slope > 0 and current_sigma <= -t['ent']:
             action = "🔥 신규 매수"
             buy_list.append(t['name'])
-        # [손절] 120일선 이탈 시 즉시 손절
         elif not is_trend_up:
             action = "🚨 손절 (120일선 이탈)"
             sell_list.append(t['name'])
-        # [익절] 목표 시그마 도달
         elif current_sigma >= t['ext']:
             action = "💰 익절 (목표가 도달)"
             sell_list.append(t['name'])
@@ -99,57 +97,66 @@ with st.spinner("야수들의 목표가를 정밀 계산 중입니다..."):
         results.append({
             "종목명": t['name'],
             "현재가": f"{curr_price:,.0f}",
-            "추세(120일)": trend_icon,
-            "현재 Sigma": f"{current_sigma:.2f}",
-            "진입 목표 (Sigma)": f"-{t['ent']} ({buy_target_price:,.0f})",
-            "청산 목표 (Sigma)": f"{t['ext']} ({sell_target_price:,.0f})",
+            "추세": trend_icon,
+            "Sigma": f"{current_sigma:.2f}",
+            "진입 목표": f"-{t['ent']} ({buy_target_price:,.0f})",
+            "청산 목표": f"{t['ext']} ({sell_target_price:,.0f})",
             "판단": action
         })
 
-    # --- 2. 슈퍼 파킹 자산 (미국빅테크10) 분석 ---
-    park_series = get_data(PARKING_ASSET['tk'])
-    if not park_series.empty:
-        park_price = park_series.iloc[-1]
-        park_ma120 = park_series.rolling(window=MA_FILTER).mean().iloc[-1]
-        
-        if park_price >= park_ma120:
-            park_status = "🟢 상승 (빅테크 매수/보유)"
-            park_action = "미국빅테크10 전량 매수/보유"
-        else:
-            park_status = "🔴 하락 (전량 현금 보유)"
-            park_action = "전량 현금 보유 (Risk Off)"
+    # --- B. 파킹 시스템 (2단계) ---
+    # 1단계: 메인 파킹 (빅테크)
+    park_series = get_data(MAIN_PARKING['tk'])
+    park_price = park_series.iloc[-1]
+    park_ma120 = park_series.rolling(window=MA_FILTER).mean().iloc[-1]
+    
+    today_month = datetime.now().month
+    
+    # 2단계: 계절성 파킹 (빅테크 탈락 시)
+    if today_month in [11, 12, 1, 2, 3, 4]:
+        season_name = "❄️ 겨울 (Winter)"
+        season_asset = SEASONAL_WINTER
     else:
-        park_price = 0; park_ma120 = 0
-        park_status = "데이터 오류"; park_action = "확인 필요"
+        season_name = "☀️ 여름 (Summer)"
+        season_asset = SEASONAL_SUMMER
+        
+    # 파킹 로직 판단
+    if park_price >= park_ma120:
+        # 빅테크가 상승세면 무조건 빅테크
+        final_park_name = MAIN_PARKING['name']
+        final_park_status = "🟢 빅테크 보유 (Risk On)"
+        final_park_action = f"**{MAIN_PARKING['name']}** 매수/보유"
+    else:
+        # 빅테크 하락세면 -> 계절성 자산으로 피신
+        final_park_name = f"{season_asset['name']} ({season_name})"
+        final_park_status = "🛡️ 계절성 파킹 (Risk Off)"
+        final_park_action = f"빅테크 전량 매도 후 **{season_asset['name']}** 매수/보유"
 
 # ==========================================
 # 📊 3. 웹 UI 출력
 # ==========================================
-st.subheader("📊 5대 야수 시그널 & 목표가")
+st.subheader("📊 5대 야수 시그널")
 df_results = pd.DataFrame(results)
-
-# 스타일링 함수
-def color_trend(val):
-    color = 'red' if '하락' in val else 'green'
-    return f'color: {color}'
 
 def highlight_action(val):
     if '매수' in val: return 'background-color: #d4edda; color: #155724; font-weight: bold;'
     elif '손절' in val or '익절' in val: return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
     return ''
 
-st.dataframe(
-    df_results.style
-    .applymap(color_trend, subset=['추세(120일)'])
-    .applymap(highlight_action, subset=['판단']),
-    use_container_width=True, hide_index=True
-)
+st.dataframe(df_results.style.applymap(highlight_action, subset=['판단']), use_container_width=True, hide_index=True)
 
-st.subheader(f"🏎️ 슈퍼 파킹 자산 ({PARKING_ASSET['name']})")
-col1, col2, col3 = st.columns(3)
-col1.metric("현재가", f"{park_price:,.0f} 원")
-col2.metric("120일 이동평균", f"{park_ma120:,.0f} 원")
-col3.metric("상태", park_status.split(' ')[0], park_status.split(' ')[1])
+st.markdown("---")
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("🏎️ 메인 엔진 (Big Tech)")
+    st.metric(label=MAIN_PARKING['name'], value=f"{park_price:,.0f} 원", delta=f"120일선 대비 {park_price-park_ma120:,.0f}")
+    st.caption(f"120일선: {park_ma120:,.0f} | 상태: {'상승장' if park_price >= park_ma120 else '하락장'}")
+
+with col2:
+    st.subheader("🛡️ 비상 대피소 (Season)")
+    st.info(f"현재 계절: **{season_name}**")
+    st.write(f"대피 자산: **{season_asset['name']}** ({season_asset['tk']})")
 
 st.markdown("---")
 st.subheader("📝 내일 아침 행동 강령")
@@ -160,9 +167,9 @@ if buy_list or sell_list:
     if buy_list:
         st.success(f"2️⃣ 확보된 현금(매도금+파킹금)을 모아 **{', '.join(buy_list)}** 종목을 1/N로 나누어 매수하세요.")
     
-    st.warning(f"3️⃣ 매수 후 남는 현금이 있다면, **[{park_action}]** 상태로 운용하세요.")
+    st.warning(f"3️⃣ 매수 후 남는 현금이 있다면, {final_park_action} 하세요.")
 else:
-    st.success(f"▶️ 포트폴리오 변경 없음. 남는 현금은 **[{park_action}]** 상태를 유지하세요.")
+    st.success(f"▶️ 포트폴리오 변경 없음. 남는 현금은 {final_park_action} 상태를 유지하세요.")
 
 st.markdown("---")
-st.caption("All-Weather Beast V4.0 | Created by Mr. Joo & The Quant Master")
+st.caption("All-Weather Beast V5.0 | Created by Mr. Joo & The Quant Master")
