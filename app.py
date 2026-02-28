@@ -38,21 +38,36 @@ def analyze_6_beasts():
         # 충분한 1년치 데이터 로드
         data = yf.download(tickers, period="1y", progress=False)
         if isinstance(data.columns, pd.MultiIndex):
-            if 'Close' in data.columns.get_level_values(0): data = data['Close']
-            else: data.columns = data.columns.get_level_values(0)
+            if 'Close' in data.columns.get_level_values(0): 
+                data = data['Close']
+            else: 
+                data.columns = data.columns.get_level_values(0)
+                
+        # 🌟 핵심 수정: 야후 파이낸스의 듬성듬성한 결측치를 직전 거래일 가격으로 채워 넣어 삭제 방지
+        data = data.ffill().bfill()
+        
     except Exception as e:
         st.error(f"데이터 다운로드 에러: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), []
         
-    if data.empty: return pd.DataFrame()
+    if data.empty: 
+        return pd.DataFrame(), []
 
     report = []
+    missing_beasts = [] # 누락된 종목 추적용
     
     for tk in tickers:
-        if tk not in data.columns: continue
+        # 🌟 누락 감지 로직
+        if tk not in data.columns: 
+            missing_beasts.append(BEASTS[tk]['name'])
+            continue
+            
         series = data[tk].dropna()
         closes = series.values
-        if len(closes) < 30: continue
+        
+        if len(closes) < 30: 
+            missing_beasts.append(BEASTS[tk]['name'])
+            continue
         
         p = BEASTS[tk]
         win = 20
@@ -121,16 +136,16 @@ def analyze_6_beasts():
             'Asset': p['name'],
             'Ticker': tk,
             'Action': action,
-            'Price': today_price,
-            'Cur Sigma': today_sigma,
-            'Cur Slope': today_slope,
+            'Price': float(today_price),
+            'Cur Sigma': float(today_sigma),
+            'Cur Slope': float(today_slope),
             'Buy Target': f"-{p['ent']} (₩{target_buy_price:,.0f})",
             'Sell Target': f"{p['ext']} (₩{target_sell_price:,.0f})",
             'Entry Slope': display_ent_slope,
             'Stop Slope': display_stop_slope
         })
 
-    return pd.DataFrame(report)
+    return pd.DataFrame(report), missing_beasts
 
 # ---------------------------------------------------------
 # ⚙️ 3. 웹 UI 렌더링
@@ -140,7 +155,11 @@ st.caption(f"Last Update: {time.strftime('%Y-%m-%d %H:%M:%S')} | Logic: 20d 3-Va
 st.markdown("---")
 
 with st.spinner("6대 야수들의 궤적을 분석 중입니다..."):
-    df_res = analyze_6_beasts()
+    df_res, missing_beasts = analyze_6_beasts()
+
+# 🌟 야후 파이낸스 서버 오류로 종목이 누락되었을 경우 경고 표시
+if missing_beasts:
+    st.warning(f"⚠️ 야후 파이낸스 일시적 서버 오류로 다음 종목의 데이터가 누락되었습니다: **{', '.join(missing_beasts)}**")
 
 if not df_res.empty:
     st.subheader("📊 6대 야수 시그널 대시보드")
