@@ -10,7 +10,7 @@ import time
 # ⚙️ 페이지 설정
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="6 Beasts V7.0 (Method A)",
+    page_title="6 Beasts V7.1 (Method A)",
     page_icon="🐅",
     layout="wide"
 )
@@ -24,18 +24,30 @@ BEASTS = {
     '140700.KS': {'name': 'KODEX 보험',              'drop': 0.9, 'ent': 3.6, 'ext': 1.8, 'theme': '가치/금리'},
     '143860.KS': {'name': 'TIGER 헬스케어',          'drop': 0.7, 'ent': 3.8, 'ext': 0.6, 'theme': '바이오'},
     '395290.KS': {'name': 'HANARO Fn K-POP',         'drop': 0.8, 'ent': 3.5, 'ext': 0.0, 'theme': '엔터'},
-    '314250.KS': {'name': 'KODEX 미국빅테크10(H)',   'drop': 1.7, 'ent': 2.2, 'ext': 3.5, 'theme': '글로벌성장'} # 파킹에서 정규 야수로 승격!
+    '314250.KS': {'name': 'KODEX 미국빅테크10(H)',   'drop': 1.7, 'ent': 2.2, 'ext': 3.5, 'theme': '글로벌성장'}
 }
+
+# ---------------------------------------------------------
+# ⚙️ 사이드바 (사용자 보유 종목 강제 설정)
+# ---------------------------------------------------------
+with st.sidebar:
+    st.header("💼 내 포트폴리오 (선진입 설정)")
+    st.markdown("장중에 선진입했거나 이미 보유 중인 종목을 선택하세요. 시스템이 알아서 **[BUY/WAIT]** 시그널을 지우고 **[HOLD/SELL]** 모드로 강제 전환합니다.")
+    
+    owned_beasts = st.multiselect(
+        "현재 보유 중인 야수 선택:",
+        options=[b['name'] for b in BEASTS.values()],
+        default=[]
+    )
 
 # ---------------------------------------------------------
 # ⚙️ 2. 데이터 분석 및 시뮬레이션 엔진
 # ---------------------------------------------------------
 @st.cache_data(ttl=900) # 15분 캐시
-def analyze_6_beasts():
+def analyze_6_beasts(owned_list):
     tickers = list(BEASTS.keys())
     
     try:
-        # 충분한 1년치 데이터 로드
         data = yf.download(tickers, period="1y", progress=False)
         if isinstance(data.columns, pd.MultiIndex):
             if 'Close' in data.columns.get_level_values(0): 
@@ -43,7 +55,6 @@ def analyze_6_beasts():
             else: 
                 data.columns = data.columns.get_level_values(0)
                 
-        # 🌟 핵심 수정: 야후 파이낸스의 듬성듬성한 결측치를 직전 거래일 가격으로 채워 넣어 삭제 방지
         data = data.ffill().bfill()
         
     except Exception as e:
@@ -54,10 +65,9 @@ def analyze_6_beasts():
         return pd.DataFrame(), []
 
     report = []
-    missing_beasts = [] # 누락된 종목 추적용
+    missing_beasts = [] 
     
     for tk in tickers:
-        # 🌟 누락 감지 로직
         if tk not in data.columns: 
             missing_beasts.append(BEASTS[tk]['name'])
             continue
@@ -76,7 +86,7 @@ def analyze_6_beasts():
         hold = False
         ent_slope = 0.0
         
-        # 1) 현재 시스템상의 보유 상태 및 진입 슬로프 추적 (히스토리)
+        # 1) 시스템상 과거 히스토리 추적
         for i in range(win, len(closes)-1):
             y = closes[i-win:i]
             s, inter, _, _, _ = linregress(x, y)
@@ -94,7 +104,7 @@ def analyze_6_beasts():
                 if c_sig >= p['ext'] or c_slp < (ent_slope - p['drop']):
                     hold = False
 
-        # 2) 오늘자(최근일) 지표 계산
+        # 2) 오늘자 지표 계산
         y_last = closes[-win:]
         s, inter, _, _, _ = linregress(x, y_last)
         L = s*(win-1) + inter 
@@ -104,14 +114,19 @@ def analyze_6_beasts():
         today_slope = (s / today_price) * 100 if today_price > 0 else 0
         today_sigma = (today_price - L) / std if std > 0 else 0
         
-        # 3) 목표가 역산
         target_buy_price = L + (-p['ent'] * std)
         target_sell_price = L + (p['ext'] * std)
         
+        # 🌟 핵심 로직: 사용자가 '보유중'이라고 체크한 경우 강제 덮어쓰기
+        is_user_owned = p['name'] in owned_list
+        
+        if is_user_owned and not hold:
+            hold = True
+            # 시스템은 미보유인데 사용자가 샀으므로, '오늘' 진입한 것으로 간주하여 기준 슬로프 셋팅
+            ent_slope = today_slope 
+
         # 4) 액션 판별
         action = "HOLD"
-        status = "HOLDING" if hold else "WAITING"
-        
         display_ent_slope = "-"
         display_stop_slope = "-"
         
@@ -122,7 +137,9 @@ def analyze_6_beasts():
             
             if today_sigma >= p['ext']: action = "SELL (익절)"
             elif today_slope < cut_slope: action = "SELL (손절)"
-            else: action = "HOLD (보유)"
+            else: 
+                action = "HOLD (보유)"
+                if is_user_owned: action = "HOLD (보유중)" # 사용자가 체크한 종목임을 명시
         else:
             if today_sigma <= -p['ent']:
                 action = "BUY (진입)"
@@ -150,21 +167,19 @@ def analyze_6_beasts():
 # ---------------------------------------------------------
 # ⚙️ 3. 웹 UI 렌더링
 # ---------------------------------------------------------
-st.title("🐅 6 Beasts V7.0 (Method A)")
-st.caption(f"Last Update: {time.strftime('%Y-%m-%d %H:%M:%S')} | Logic: 20d 3-Var (Event-Driven Rebalancing)")
+st.title("🐅 6 Beasts V7.1 (선진입 대응 패치)")
+st.caption(f"Last Update: {time.strftime('%Y-%m-%d %H:%M:%S')} | Logic: 20d 3-Var (User Override)")
 st.markdown("---")
 
 with st.spinner("6대 야수들의 궤적을 분석 중입니다..."):
-    df_res, missing_beasts = analyze_6_beasts()
+    df_res, missing_beasts = analyze_6_beasts(owned_beasts) # 사용자가 체크한 리스트 전달
 
-# 🌟 야후 파이낸스 서버 오류로 종목이 누락되었을 경우 경고 표시
 if missing_beasts:
     st.warning(f"⚠️ 야후 파이낸스 일시적 서버 오류로 다음 종목의 데이터가 누락되었습니다: **{', '.join(missing_beasts)}**")
 
 if not df_res.empty:
     st.subheader("📊 6대 야수 시그널 대시보드")
     
-    # 컬러 스타일링
     def text_color_action(val):
         if 'BUY' in val: return 'color: #155724; background-color: #d4edda; font-weight: bold;'
         if 'SELL' in val: return 'color: #721c24; background-color: #f8d7da; font-weight: bold;'
@@ -187,9 +202,8 @@ if not df_res.empty:
         column_order=['Theme', 'Asset', 'Action', 'Price', 'Cur Sigma', 'Cur Slope', 'Buy Target', 'Sell Target', 'Entry Slope', 'Stop Slope']
     )
     
-    # --- 내일 아침 행동 강령 (Method A 핵심) ---
     st.markdown("---")
-    st.subheader("📝 내일 시가 행동 강령 (Method A: 현금 파킹형)")
+    st.subheader("📝 내일 시가 행동 강령")
     
     buy_list = df_res[df_res['Action'].str.contains('BUY')]['Asset'].tolist()
     sell_list = df_res[df_res['Action'].str.contains('SELL')]['Asset'].tolist()
@@ -199,18 +213,8 @@ if not df_res.empty:
             st.error(f"🚨 **[SELL]** 보유 중인 **{', '.join(sell_list)}** 종목을 내일 시가에 전량 매도하세요.")
         
         if buy_list:
-            st.success(f"🔥 **[BUY & REBALANCE]** 내일 시가에 **{', '.join(buy_list)}** 종목을 매수합니다. \n\n👉 **(기존 현금 + 오늘 매도 대금 + 기존 보유 종목 일부 익절금)**을 모두 모아, 내일 포트폴리오에 담길 **모든 야수들의 비중이 1/N이 되도록 리밸런싱** 하세요.")
+            st.success(f"🔥 **[BUY & REBALANCE]** 내일 시가에 **{', '.join(buy_list)}** 종목을 매수합니다.")
         elif sell_list and not buy_list:
-            st.warning(f"🏦 **[CASH PARKING]** 내일은 신규 매수 신호가 없습니다. 매도한 대금은 리밸런싱 하지 말고 **'100% 예수금(현금)'** 상태로 안전하게 파킹(대기) 하십시오.")
+            st.warning(f"🏦 **[CASH PARKING]** 매도 후 신규 매수 신호가 없습니다. **'100% 현금'** 상태로 파킹하십시오.")
     else:
-        st.success("▶️ **[HOLD]** 포트폴리오 변경 및 리밸런싱 없음. 현재 상태를 그대로 홀딩하십시오.")
-
-    with st.expander("📖 **전략 가이드 및 Method A 원칙 (Click)**"):
-        st.markdown("""
-        * **6대 야수의 분산:** 원자재, 경기민감, 가치, 바이오, 엔터, 그리고 글로벌성장(미국빅테크)까지 완벽히 상관계수가 엇갈리는 구조입니다.
-        * **Method A (매수 이벤트 리밸런싱):** 1. **매수(BUY) 신호가 뜬 날에만** 계좌의 총 자산(현금+주식)을 모아 1/N로 리밸런싱합니다.
-            2. **매도(SELL) 신호만 뜬 날**에는 판 돈을 다른 주식에 물타기 하지 않고 **'현금'**으로 들고 쉽니다. (이것이 2022년 같은 폭락장을 피하는 최강의 방패입니다.)
-        * **Stop Slope (손절 각도기):** 샀던 날의 상승 추세(Entry Slope) 대비 이 수치 이상 꺾이면, 미련 없이 기계적으로 손절합니다.
-        """)
-else:
-    st.error("데이터 로드 실패. 야후 파이낸스 서버 오류일 수 있으니 잠시 후 다시 시도해주세요.")
+        st.success("▶️ **[HOLD]** 포트폴리오 변경 사항 없음. 현재 상태를 그대로 홀딩하십시오.")
