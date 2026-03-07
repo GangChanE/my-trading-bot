@@ -3,77 +3,87 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from scipy.stats import linregress
-from datetime import datetime
 import time
 
 # ---------------------------------------------------------
 # ⚙️ 페이지 설정
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="6 Beasts V7.1 (Method A)",
+    page_title="5 Beasts V17.0 (Dynamic Scaling)",
     page_icon="🐅",
     layout="wide"
 )
 
 # ---------------------------------------------------------
-# ⚙️ 1. 전략 파라미터 (6대 정규 야수)
+# ⚙️ 1. 전략 파라미터 (V17.0 궁극의 5야수)
 # ---------------------------------------------------------
 BEASTS = {
-    '144600.KS': {'name': 'KODEX 은선물(H)',         'drop': 4.9, 'ent': 2.2, 'ext': 3.8, 'theme': '원자재'},
-    '139230.KS': {'name': 'TIGER 200 중공업',        'drop': 0.8, 'ent': 3.1, 'ext': -0.2,'theme': '경기민감'},
-    '140700.KS': {'name': 'KODEX 보험',              'drop': 0.9, 'ent': 3.6, 'ext': 1.8, 'theme': '가치/금리'},
-    '143860.KS': {'name': 'TIGER 헬스케어',          'drop': 0.7, 'ent': 3.8, 'ext': 0.6, 'theme': '바이오'},
-    '395290.KS': {'name': 'HANARO Fn K-POP',         'drop': 0.8, 'ent': 3.5, 'ext': 0.0, 'theme': '엔터'},
-    '314250.KS': {'name': 'KODEX 미국빅테크10(H)',   'drop': 1.7, 'ent': 2.2, 'ext': 3.5, 'theme': '글로벌성장'}
+    '139230.KS': {'name': 'TIGER 200 중공업',       'ent': 3.0, 'ext': -0.3, 'drop': 0.7, 'r_ent': 0.02, 'r_ext': 0.01, 'theme': '경기민감'},
+    '261220.KS': {'name': 'KODEX WTI원유선물(H)',   'ent': 3.3, 'ext': 3.6,  'drop': 0.5, 'r_ent': 0.01, 'r_ext': 0.02, 'theme': '원자재'},
+    '371460.KS': {'name': 'TIGER 차이나전기차',     'ent': 2.6, 'ext': -0.9, 'drop': 0.9, 'r_ent': 0.01, 'r_ext': 0.03, 'theme': '해외/섹터'},
+    '305720.KS': {'name': 'KODEX 2차전지산업',      'ent': 3.5, 'ext': 2.5,  'drop': 2.2, 'r_ent': 0.01, 'r_ext': 0.02, 'theme': '국내/섹터'},
+    '314250.KS': {'name': 'KODEX 미국빅테크10(H)',  'ent': 3.1, 'ext': 3.3,  'drop': 1.1, 'r_ent': 0.01, 'r_ext': 0.01, 'theme': '글로벌성장'}
 }
 
 # ---------------------------------------------------------
-# ⚙️ 사이드바 (사용자 보유 종목 강제 설정)
+# ⚙️ 사이드바 (사용자 보유 종목 및 상태 설정)
 # ---------------------------------------------------------
 with st.sidebar:
-    st.header("💼 내 포트폴리오 (선진입 설정)")
-    st.markdown("장중에 선진입했거나 이미 보유 중인 종목을 선택하세요. 시스템이 알아서 **[BUY/WAIT]** 시그널을 지우고 **[HOLD/SELL]** 모드로 강제 전환합니다.")
+    st.header("💼 내 포트폴리오 (상태 설정)")
+    st.markdown("현재 실제 계좌에 보유 중인 야수와 그 **투입 비율(상태)**을 정확히 선택해 주세요.")
     
-    owned_beasts = st.multiselect(
-        "현재 보유 중인 야수 선택:",
-        options=[b['name'] for b in BEASTS.values()],
-        default=[]
-    )
+    user_portfolio = {}
+    for tk, info in BEASTS.items():
+        st.markdown(f"**{info['name']}**")
+        status = st.radio(
+            f"상태 선택 ({info['name']})",
+            options=["미보유 (0%)", "1차 진입 완료 (50%)", "2차 추매 완료 (100%)", "1차 익절 완료 (50% 남음)"],
+            key=tk,
+            label_visibility="collapsed"
+        )
+        if status != "미보유 (0%)":
+            user_portfolio[tk] = status
+    
+    st.markdown("---")
+    st.info("💡 **V17.0 트레일링 룰**\n* **1차 진입(50%)**: 시그마 과매도 도달 시\n* **2차 추매(100%)**: 1차 후 저점 대비 반등 시\n* **1차 익절(50%)**: 시그마 과매수 도달 시\n* **2차 익절(0%)**: 1차 후 고점 대비 하락 시\n* **손절(0%)**: 기준 기울기 이탈 시")
 
 # ---------------------------------------------------------
 # ⚙️ 2. 데이터 분석 및 시뮬레이션 엔진
 # ---------------------------------------------------------
 @st.cache_data(ttl=900) # 15분 캐시
-def analyze_6_beasts(owned_list):
+def analyze_5_beasts(portfolio):
     tickers = list(BEASTS.keys())
     
     try:
-        data = yf.download(tickers, period="1y", progress=False)
-        if isinstance(data.columns, pd.MultiIndex):
-            if 'Close' in data.columns.get_level_values(0): 
-                data = data['Close']
-            else: 
-                data.columns = data.columns.get_level_values(0)
-                
-        data = data.ffill().bfill()
+        # 데이터는 트레일링(고점/저점) 파악을 위해 넉넉히 1년 치를 가져옴
+        data_close = yf.download(tickers, period="1y", progress=False)['Close'].ffill()
+        data_high = yf.download(tickers, period="1y", progress=False)['High'].ffill()
+        data_low = yf.download(tickers, period="1y", progress=False)['Low'].ffill()
         
+        # Series 처리 방어 (종목이 1개일 경우)
+        if isinstance(data_close, pd.Series):
+            data_close = data_close.to_frame()
+            data_high = data_high.to_frame()
+            data_low = data_low.to_frame()
+            
     except Exception as e:
         st.error(f"데이터 다운로드 에러: {e}")
         return pd.DataFrame(), []
         
-    if data.empty: 
+    if data_close.empty: 
         return pd.DataFrame(), []
 
     report = []
     missing_beasts = [] 
     
     for tk in tickers:
-        if tk not in data.columns: 
+        if tk not in data_close.columns: 
             missing_beasts.append(BEASTS[tk]['name'])
             continue
             
-        series = data[tk].dropna()
-        closes = series.values
+        closes = data_close[tk].dropna().values
+        highs = data_high[tk].dropna().values
+        lows = data_low[tk].dropna().values
         
         if len(closes) < 30: 
             missing_beasts.append(BEASTS[tk]['name'])
@@ -83,28 +93,7 @@ def analyze_6_beasts(owned_list):
         win = 20
         x = np.arange(win)
         
-        hold = False
-        ent_slope = 0.0
-        
-        # 1) 시스템상 과거 히스토리 추적
-        for i in range(win, len(closes)-1):
-            y = closes[i-win:i]
-            s, inter, _, _, _ = linregress(x, y)
-            std = np.std(y - (s*x + inter))
-            
-            c_sig = 999.0
-            c_slp = -999.0
-            if std > 0: c_sig = (closes[i] - (s*(win-1)+inter)) / std
-            if closes[i] > 0: c_slp = (s / closes[i]) * 100
-            
-            if not hold:
-                if c_sig <= -p['ent']:
-                    hold = True; ent_slope = c_slp
-            else:
-                if c_sig >= p['ext'] or c_slp < (ent_slope - p['drop']):
-                    hold = False
-
-        # 2) 오늘자 지표 계산
+        # 오늘자(마지막 거래일) 지표 계산
         y_last = closes[-win:]
         s, inter, _, _, _ = linregress(x, y_last)
         L = s*(win-1) + inter 
@@ -114,52 +103,85 @@ def analyze_6_beasts(owned_list):
         today_slope = (s / today_price) * 100 if today_price > 0 else 0
         today_sigma = (today_price - L) / std if std > 0 else 0
         
-        target_buy_price = L + (-p['ent'] * std)
-        target_sell_price = L + (p['ext'] * std)
+        # 🌟 V17 동적 스케일링 액션 판별 🌟
+        action = "WAIT (대기)"
+        target_info = f"진입대기 (Sig -{p['ent']:.1f})"
         
-        # 🌟 핵심 로직: 사용자가 '보유중'이라고 체크한 경우 강제 덮어쓰기
-        is_user_owned = p['name'] in owned_list
-        
-        if is_user_owned and not hold:
-            hold = True
-            # 시스템은 미보유인데 사용자가 샀으므로, '오늘' 진입한 것으로 간주하여 기준 슬로프 셋팅
-            ent_slope = today_slope 
-
-        # 4) 액션 판별
-        action = "HOLD"
-        display_ent_slope = "-"
-        display_stop_slope = "-"
-        
-        if hold:
-            cut_slope = ent_slope - p['drop']
-            display_ent_slope = f"{ent_slope:.2f}%"
-            display_stop_slope = f"{cut_slope:.2f}%"
+        if tk in portfolio:
+            status = portfolio[tk]
             
-            if today_sigma >= p['ext']: action = "SELL (익절)"
-            elif today_slope < cut_slope: action = "SELL (손절)"
-            else: 
-                action = "HOLD (보유)"
-                if is_user_owned: action = "HOLD (보유중)" # 사용자가 체크한 종목임을 명시
+            # 1. 1차 진입 완료 상태 (50% 보유) -> 2차 추매(트레일링) OR 손절 대기
+            if status == "1차 진입 완료 (50%)":
+                # 간이 트레일링 계산: 사용자가 샀다고 가정한 최근 10일 중 최저점 찾기
+                recent_low = np.min(lows[-10:]) 
+                bounce_rate = (today_price - recent_low) / recent_low
+                
+                # 손절은 기준 기울기(최근 10일 평균 기울기로 임시 대체) 이탈 시
+                recent_slopes = []
+                for i in range(len(closes)-10, len(closes)):
+                    sy, _inter, _, _, _ = linregress(x, closes[i-win:i])
+                    recent_slopes.append((sy/closes[i])*100)
+                avg_ent_slope = np.mean(recent_slopes)
+                
+                if today_slope < (avg_ent_slope - p['drop']):
+                    action = "🛑 SELL ALL (손절)"
+                    target_info = "기울기 이탈"
+                elif bounce_rate >= p['r_ent']:
+                    action = "🔥 BUY 50% (2차 추매)"
+                    target_info = f"저점대비 +{bounce_rate*100:.1f}% 반등 (목표 {p['r_ent']*100}%)"
+                else:
+                    action = "HOLD 50% (관망)"
+                    target_info = f"반등 대기 (현재 +{bounce_rate*100:.1f}%)"
+
+            # 2. 2차 진입 완료 상태 (100% 보유) -> 1차 익절 OR 손절 대기
+            elif status == "2차 추매 완료 (100%)":
+                # 손절 기울기 계산 (임시)
+                recent_slopes = []
+                for i in range(len(closes)-20, len(closes)):
+                    sy, _inter, _, _, _ = linregress(x, closes[i-win:i])
+                    recent_slopes.append((sy/closes[i])*100)
+                avg_ent_slope = np.mean(recent_slopes)
+                
+                if today_slope < (avg_ent_slope - p['drop']):
+                    action = "🛑 SELL ALL (손절)"
+                    target_info = "기울기 이탈"
+                elif today_sigma >= p['ext']:
+                    action = "💰 SELL 50% (1차 익절)"
+                    target_info = f"과매수 도달 (Sig {today_sigma:.2f})"
+                else:
+                    action = "HOLD 100% (관망)"
+                    target_info = f"익절 대기 (목표 Sig {p['ext']:.1f})"
+
+            # 3. 1차 익절 완료 상태 (50% 보유) -> 2차 익절(트레일링) OR 손절 대기
+            elif status == "1차 익절 완료 (50% 남음)":
+                # 최근 10일 중 최고점 찾기
+                recent_high = np.max(highs[-10:])
+                drop_rate = (recent_high - today_price) / recent_high
+                
+                if drop_rate >= p['r_ext']:
+                    action = "📉 SELL ALL (트레일링 익절)"
+                    target_info = f"고점대비 -{drop_rate*100:.1f}% 하락 (목표 {p['r_ext']*100}%)"
+                else:
+                    action = "HOLD 50% (관망)"
+                    target_info = f"하락 대기 (현재 -{drop_rate*100:.1f}%)"
+                    
         else:
+            # 미보유 상태 -> 1차 진입 대기
             if today_sigma <= -p['ent']:
-                action = "BUY (진입)"
-                display_ent_slope = f"{today_slope:.2f}% (New)"
-                display_stop_slope = f"{today_slope - p['drop']:.2f}% (Est)"
+                action = "🛒 BUY 50% (1차 진입)"
+                target_info = f"과매도 도달 (Sig {today_sigma:.2f})"
             else:
                 action = "WAIT (대기)"
+                target_info = f"진입대기 (목표 Sig -{p['ent']:.1f})"
                 
         report.append({
             'Theme': p['theme'],
             'Asset': p['name'],
-            'Ticker': tk,
             'Action': action,
             'Price': float(today_price),
             'Cur Sigma': float(today_sigma),
             'Cur Slope': float(today_slope),
-            'Buy Target': f"-{p['ent']} (₩{target_buy_price:,.0f})",
-            'Sell Target': f"{p['ext']} (₩{target_sell_price:,.0f})",
-            'Entry Slope': display_ent_slope,
-            'Stop Slope': display_stop_slope
+            'Target/Status Info': target_info
         })
 
     return pd.DataFrame(report), missing_beasts
@@ -167,23 +189,24 @@ def analyze_6_beasts(owned_list):
 # ---------------------------------------------------------
 # ⚙️ 3. 웹 UI 렌더링
 # ---------------------------------------------------------
-st.title("🐅 6 Beasts V7.1 (선진입 대응 패치)")
-st.caption(f"Last Update: {time.strftime('%Y-%m-%d %H:%M:%S')} | Logic: 20d 3-Var (User Override)")
+st.title("🐅 The Quantum Oracle V17.0 (5 Beasts Dynamic)")
+st.caption(f"Last Update: {time.strftime('%Y-%m-%d %H:%M:%S')} | Logic: Dynamic Scaling & Trailing Stop")
 st.markdown("---")
 
-with st.spinner("6대 야수들의 궤적을 분석 중입니다..."):
-    df_res, missing_beasts = analyze_6_beasts(owned_beasts) # 사용자가 체크한 리스트 전달
+with st.spinner("야수들의 현재 사냥 상태를 분석 중입니다..."):
+    df_res, missing_beasts = analyze_5_beasts(user_portfolio) 
 
 if missing_beasts:
-    st.warning(f"⚠️ 야후 파이낸스 일시적 서버 오류로 다음 종목의 데이터가 누락되었습니다: **{', '.join(missing_beasts)}**")
+    st.warning(f"⚠️ 야후 파이낸스 서버 오류로 데이터 누락: **{', '.join(missing_beasts)}**")
 
 if not df_res.empty:
-    st.subheader("📊 6대 야수 시그널 대시보드")
+    st.subheader("📊 5야수 실시간 시그널 대시보드")
     
     def text_color_action(val):
         if 'BUY' in val: return 'color: #155724; background-color: #d4edda; font-weight: bold;'
         if 'SELL' in val: return 'color: #721c24; background-color: #f8d7da; font-weight: bold;'
         if 'HOLD' in val: return 'color: #004085; background-color: #cce5ff; font-weight: bold;'
+        if 'WAIT' in val: return 'color: #856404; background-color: #fff3cd;'
         return 'color: #383d41; background-color: #e2e3e5;'
 
     st.dataframe(
@@ -198,23 +221,28 @@ if not df_res.empty:
         .set_table_styles([{'selector': 'th', 'props': [('text-align', 'center')]}])
         , 
         use_container_width=True,
-        hide_index=True,
-        column_order=['Theme', 'Asset', 'Action', 'Price', 'Cur Sigma', 'Cur Slope', 'Buy Target', 'Sell Target', 'Entry Slope', 'Stop Slope']
+        hide_index=True
     )
     
     st.markdown("---")
-    st.subheader("📝 내일 시가 행동 강령")
+    st.subheader("📝 내일 아침 행동 강령 (Action Plan)")
     
-    buy_list = df_res[df_res['Action'].str.contains('BUY')]['Asset'].tolist()
-    sell_list = df_res[df_res['Action'].str.contains('SELL')]['Asset'].tolist()
+    action_items = df_res[df_res['Action'].str.contains('BUY|SELL')]
     
-    if buy_list or sell_list:
-        if sell_list:
-            st.error(f"🚨 **[SELL]** 보유 중인 **{', '.join(sell_list)}** 종목을 내일 시가에 전량 매도하세요.")
-        
-        if buy_list:
-            st.success(f"🔥 **[BUY & REBALANCE]** 내일 시가에 **{', '.join(buy_list)}** 종목을 매수합니다.")
-        elif sell_list and not buy_list:
-            st.warning(f"🏦 **[CASH PARKING]** 매도 후 신규 매수 신호가 없습니다. **'100% 현금'** 상태로 파킹하십시오.")
+    if not action_items.empty:
+        for _, row in action_items.iterrows():
+            if 'SELL ALL' in row['Action']:
+                st.error(f"🚨 **[전량 매도]** {row['Asset']} : {row['Target/Status Info']} -> 내일 시가에 남은 물량 100% 매도")
+            elif 'SELL 50%' in row['Action']:
+                st.warning(f"💰 **[절반 익절]** {row['Asset']} : {row['Target/Status Info']} -> 내일 시가에 보유 물량의 50% 매도 (1차 익절)")
+            elif 'BUY 100%' in row['Action'] or 'BUY 50% (2차' in row['Action']:
+                st.success(f"🔥 **[불타기 추매]** {row['Asset']} : {row['Target/Status Info']} -> 내일 시가에 남은 현금 비중 100% 채우기")
+            elif 'BUY 50%' in row['Action']:
+                st.info(f"🛒 **[1차 진입]** {row['Asset']} : {row['Target/Status Info']} -> 내일 시가에 할당 비중의 50%만 매수")
     else:
-        st.success("▶️ **[HOLD]** 포트폴리오 변경 사항 없음. 현재 상태를 그대로 홀딩하십시오.")
+        # 아무 행동도 안 할 때
+        if user_portfolio:
+            st.success("▶️ **[HOLD]** 현재 야수가 사냥 중입니다. 섣불리 움직이지 말고 관망하십시오.")
+        else:
+            st.success("🏦 **[100% CASH PARKING]** 폭락장이 올 때까지 KOFR(현금) 이자를 받으며 편안하게 관망하십시오.")
+
