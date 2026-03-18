@@ -2,16 +2,19 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import datetime
+from datetime import datetime
 
 # =====================================================================
 # ⚙️ 1. 최종 확정 파라미터 (13야수 하이브리드 V3)
 # =====================================================================
 PORTFOLIO_CONFIG = {
+    # --- 🛡️ 수비수 (이웃 1위 방어형) ---
     "305540.KS": {"name": "TIGER 2차전지테마", "buy": -3.5, "sell": 0.8, "stop": -0.8},
     "139230.KS": {"name": "TIGER 200중공업", "buy": -2.4, "sell": 1.0, "stop": -0.2},
     "091180.KS": {"name": "KODEX 자동차", "buy": -3.0, "sell": 1.8, "stop": -5.0},
     "371160.KS": {"name": "TIGER 차이나항셍테크", "buy": -2.5, "sell": 0.7, "stop": -0.8},
+    
+    # --- ⚔️ 공격수 (스윗 1위 타격형) ---
     "091160.KS": {"name": "KODEX 반도체", "buy": -3.1, "sell": 2.3, "stop": -5.0},
     "118990.KS": {"name": "KODEX 게임산업", "buy": -2.2, "sell": 1.0, "stop": -1.0},
     "157490.KS": {"name": "TIGER 소프트웨어", "buy": -3.4, "sell": 2.3, "stop": -0.6},
@@ -24,167 +27,109 @@ PORTFOLIO_CONFIG = {
 }
 
 # =====================================================================
-# 🚀 2. 데이터 로더 (안전장치 추가)
+# 📡 2. 실시간 데이터 스캐너 (가장 최근 종가 기준)
 # =====================================================================
-@st.cache_data(ttl=86400) 
-def load_and_preprocess_data():
+@st.cache_data(ttl=3600) # 1시간 주기로 캐시 갱신
+def get_daily_signals():
     tickers = list(PORTFOLIO_CONFIG.keys())
+    # 60일 이동평균을 구하기 위해 넉넉히 최근 150일치 데이터만 로드
+    df = yf.download(tickers, period="150d", progress=False)['Close']
+    df.fillna(method='ffill', inplace=True)
     
-    # 🚨 end="today" 제거 (에러의 주범! 없애면 자동으로 최근 거래일까지 불러옴)
-    df_all = yf.download(tickers, start="2018-01-01", progress=False)['Close']
-    
-    # 데이터가 비어있을 경우를 대비한 안전장치
-    if df_all is None or df_all.empty:
-        return None, None, None
-
-    df_all.fillna(method='ffill', inplace=True)
+    last_date = df.index[-1].strftime("%Y년 %m월 %d일")
     
     LR_WINDOW = 60
-    sigma_data, slope_data = {}, {}
     weights = np.arange(1, LR_WINDOW + 1) - (LR_WINDOW + 1) / 2
     sum_w2 = np.sum(weights**2)
-
+    
+    results = []
+    
     for ticker in tickers:
-        prices = df_all[ticker].values
-        ma = pd.Series(prices).rolling(LR_WINDOW).mean().values
-        slope = pd.Series(prices).rolling(LR_WINDOW).apply(lambda y: np.sum(weights * y) / sum_w2, raw=True).values
+        prices = df[ticker].values
+        if len(prices) < LR_WINDOW:
+            continue
+            
+        # 오늘(최근) 기준 지표 계산
+        ma = pd.Series(prices).rolling(LR_WINDOW).mean().values[-1]
+        slope = pd.Series(prices).rolling(LR_WINDOW).apply(lambda y: np.sum(weights * y) / sum_w2, raw=True).values[-1]
         lr_current = ma + slope * ((LR_WINDOW - 1) / 2)
-        std = pd.Series(prices).rolling(LR_WINDOW).std().values
+        std = pd.Series(prices).rolling(LR_WINDOW).std().values[-1]
         
-        sigma_data[ticker] = (prices - lr_current) / std
-        slope_data[ticker] = (slope / ma) * 100
+        cur_price = prices[-1]
+        cur_sigma = (cur_price - lr_current) / std if std != 0 else 0
+        cur_slope_pct = (slope / ma) * 100 if ma != 0 else 0
         
-    return df_all, sigma_data, slope_data
+        # 파라미터 매칭
+        params = PORTFOLIO_CONFIG[ticker]
+        name = params['name']
+        buy_sig = params['buy']
+        sell_sig = params['sell']
+        stop_slp = params['stop']
+        
+        # 🔥 내일 아침 트레이딩 액션 판독기 🔥
+        if cur_slope_pct < stop_slp:
+            signal = "🔴 전량 매도 (추세 이탈/손절)"
+        elif cur_sigma >= sell_sig:
+            signal = "🔵 전량 익절 (목표 도달)"
+        elif cur_sigma <= buy_sig:
+            signal = "🔥 신규 매수 (진입 타점)"
+        else:
+            signal = "⏳ 관망 (대기)"
+            
+        results.append({
+            "종목명": name,
+            "오늘 종가": f"{cur_price:,.0f} 원",
+            "내일 아침 액션": signal,
+            "현재 시그마": round(cur_sigma, 2),
+            "(진입/청산 기준)": f"({buy_sig} / {sell_sig})",
+            "현재 기울기(%)": round(cur_slope_pct, 2),
+            "(손절 기준)": f"({stop_slp}%)"
+        })
+        
+    df_result = pd.DataFrame(results)
+    return df_result, last_date
 
 # =====================================================================
-# ⚖️ 3. 포트폴리오 백테스트 엔진
+# 🖥️ 3. 스트림릿 대시보드 UI
 # =====================================================================
-@st.cache_data
-def run_hybrid_portfolio(df_all, sigma_data, slope_data, start_capital=20000000):
-    SLIPPAGE = 0.0015
-    TAX_RATE = 0.154
-    LR_WINDOW = 60
-    dates = df_all.index
-    tickers = list(PORTFOLIO_CONFIG.keys())
+st.set_page_config(page_title="13야수 트레이딩 레이더", layout="wide")
+
+st.title("🦁 13야수 실전 트레이딩 레이더")
+st.markdown("매일 저녁 장 마감 후 확인하고, **다음 날 아침 시초가**에 기계처럼 대응하세요.")
+
+with st.spinner('오늘 장마감 데이터를 분석 중입니다...'):
+    df_signals, last_date = get_daily_signals()
+
+if df_signals is not None and not df_signals.empty:
+    st.success(f"✅ 데이터 업데이트 완료 (기준일: {last_date} 종가)")
     
-    cash = start_capital
-    daily_equity = []
-    port = {t: {"shares": 0, "avg_price": 0} for t in tickers}
-    
-    for i in range(LR_WINDOW, len(dates)):
-        # [1] 매도 처리 
-        for ticker, p_info in port.items():
-            if p_info["shares"] == 0: continue
-            price = df_all[ticker].values[i]
-            if np.isnan(price): continue
-            
-            sig, slp = sigma_data[ticker][i], slope_data[ticker][i]
-            params = PORTFOLIO_CONFIG[ticker]
-            
-            if slp < params['stop'] or sig >= params['sell']:
-                gross = p_info["shares"] * price * (1 - SLIPPAGE)
-                profit = gross - (p_info["shares"] * p_info["avg_price"])
-                if profit > 0: gross -= profit * TAX_RATE
-                cash += gross
-                p_info["shares"], p_info["avg_price"] = 0, 0
-                
-        # [2] 매수 대상 색출 
-        new_signals = []
-        held_tickers = []
-        for ticker, p_info in port.items():
-            price = df_all[ticker].values[i]
-            if np.isnan(price): continue
-            sig, slp = sigma_data[ticker][i], slope_data[ticker][i]
-            params = PORTFOLIO_CONFIG[ticker]
-            
-            if p_info["shares"] > 0: 
-                held_tickers.append(ticker)
-            elif p_info["shares"] == 0 and slp >= params['stop'] and sig <= params['buy']:
-                new_signals.append(ticker)
-
-        # [3] 1/N 동적 자금 할당
-        if len(new_signals) > 0:
-            rebalance_pool = held_tickers + new_signals
-            current_held_value = sum(port[t]["shares"] * df_all[t].values[i] for t in held_tickers)
-            total_equity = cash + current_held_value
-            target_value_per_asset = total_equity / len(rebalance_pool)
-            
-            # 비중 초과 매도
-            for ticker in rebalance_pool:
-                if port[ticker]["shares"] > 0:
-                    price = df_all[ticker].values[i]
-                    current_val = port[ticker]["shares"] * price
-                    if current_val > target_value_per_asset:
-                        excess_val = current_val - target_value_per_asset
-                        shares_to_sell = excess_val / price
-                        gross = shares_to_sell * price * (1 - SLIPPAGE)
-                        profit = gross - (shares_to_sell * port[ticker]["avg_price"])
-                        if profit > 0: gross -= profit * TAX_RATE
-                        cash += gross
-                        port[ticker]["shares"] -= shares_to_sell
-            
-            # 비중 부족 매수
-            for ticker in rebalance_pool:
-                price = df_all[ticker].values[i]
-                current_val = port[ticker]["shares"] * price
-                if current_val < target_value_per_asset:
-                    deficit_val = target_value_per_asset - current_val
-                    actual_invest = min(deficit_val, cash * 0.99) 
-                    if actual_invest > 10000:
-                        shares_to_buy = (actual_invest * (1 - SLIPPAGE)) / price
-                        old_val = port[ticker]["shares"] * port[ticker]["avg_price"]
-                        new_val = shares_to_buy * price
-                        port[ticker]["shares"] += shares_to_buy
-                        port[ticker]["avg_price"] = (old_val + new_val) / port[ticker]["shares"]
-                        cash -= actual_invest
-
-        # [4] 일일 자산 기록
-        day_equity = cash + sum(port[t]["shares"] * (df_all[t].values[i] if not np.isnan(df_all[t].values[i]) else 0) for t in port)
-        daily_equity.append(day_equity)
+    # 신규 매수나 매도 시그널이 뜬 종목만 위로 정렬 (관망은 아래로)
+    def sort_signal(val):
+        if "매수" in val: return 1
+        elif "매도" in val or "익절" in val: return 2
+        else: return 3
         
-    return dates[LR_WINDOW:], daily_equity
-
-# =====================================================================
-# 🖥️ 4. 스트림릿 화면(UI) 렌더링 부
-# =====================================================================
-st.set_page_config(page_title="13야수 퀀트 포트폴리오", layout="wide")
-
-st.title("🦁 13야수 하이브리드 포트폴리오 대시보드")
-st.markdown("회원님의 오리지널 로직 (트레일링 방어 + 1/N 동적 자본 할당 + 현실 세금/수수료 반영)")
-
-with st.spinner('야후 파이낸스에서 데이터를 불러오고 있습니다... (최초 1회 약 10~15초 소요)'):
-    df_all, sigmas, slopes = load_and_preprocess_data()
-
-# 🚨 데이터 로드 실패 시 에러창을 띄우고 정지 (화면이 하얗게 뻗는 것 방지)
-if df_all is None or df_all.empty:
-    st.error("🚨 야후 파이낸스 서버 접속이 지연되고 있습니다. 잠시 후 새로고침(F5)을 눌러주세요.")
-    st.stop()
-
-with st.spinner('백테스트 연산 중입니다...'):
-    dates, equity_curve = run_hybrid_portfolio(df_all, sigmas, slopes)
-
-if len(equity_curve) == 0:
-    st.error("🚨 연산 결과가 없습니다. 데이터 범위가 너무 짧을 수 있습니다.")
-    st.stop()
-
-# --- 결과 계산 ---
-START_CAPITAL = 20000000
-final_capital = equity_curve[-1]
-cagr = ((final_capital / START_CAPITAL) ** (252 / len(equity_curve)) - 1) * 100
-peak = np.maximum.accumulate(equity_curve)
-mdd = ((np.array(equity_curve) - peak) / peak).min() * 100
-
-# --- 화면 상단 요약 대시보드 ---
-col1, col2, col3 = st.columns(3)
-col1.metric("▶ 총 운용 자산", f"{final_capital:,.0f} 원", f"순수익: {final_capital - START_CAPITAL:,.0f} 원")
-col2.metric("🚀 연 복리 (CAGR)", f"{cagr:.2f} %")
-col3.metric("📉 최대 낙폭 (MDD)", f"{mdd:.2f} %", delta_color="inverse")
-
-st.divider()
-
-# --- 자산 우상향 차트 ---
-st.subheader("📈 포트폴리오 자산 성장 곡선")
-chart_data = pd.DataFrame({'총 자산(원)': equity_curve}, index=dates)
-st.line_chart(chart_data, use_container_width=True)
-
-st.success("데이터 로딩 및 시뮬레이션 완료! (매일 최신 데이터로 업데이트 됩니다)")
+    df_signals['sort_key'] = df_signals['내일 아침 액션'].apply(sort_signal)
+    df_signals = df_signals.sort_values('sort_key').drop('sort_key', axis=1).reset_index(drop=True)
+    
+    # 판다스 데이터프레임 스타일링 (시그널에 따라 색상 강조)
+    def color_signal(val):
+        if "매수" in str(val):
+            return 'color: #ff4b4b; font-weight: bold;'
+        elif "매도" in str(val) or "익절" in str(val):
+            return 'color: #0068c9; font-weight: bold;'
+        elif "관망" in str(val):
+            return 'color: gray;'
+        return ''
+    
+    styled_df = df_signals.style.map(color_signal, subset=['내일 아침 액션'])
+    
+    # 표 출력
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    
+    st.info("💡 **매매 가이드** \n"
+            "1. **신규 매수**가 뜬 종목이 있다면, (현재 계좌 현금 ÷ 뜬 종목 수) 만큼 다음 날 시초가에 매수합니다.\n"
+            "2. 보유 중인 종목에 **매도/익절**이 떴다면 다음 날 시초가에 미련 없이 전량 던집니다.\n"
+            "3. **관망**은 아무것도 하지 않고 구경만 합니다.")
+else:
+    st.error("데이터를 불러오지 못했습니다. 야후 파이낸스 서버 상태를 확인해 주세요.")
