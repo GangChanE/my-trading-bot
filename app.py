@@ -27,13 +27,14 @@ PORTFOLIO_CONFIG = {
 }
 
 # =====================================================================
-# 📡 2. 실시간 상태 시뮬레이터 (진입 기울기 기억 & 히스토리 추적)
+# 📡 2. 실시간 상태 시뮬레이터 (전체 역사 트래킹)
 # =====================================================================
 @st.cache_data(ttl=3600) 
 def get_daily_signals():
     tickers = list(PORTFOLIO_CONFIG.keys())
-    # 최근 매수/매도 기록을 찾기 위해 넉넉히 2년 치 데이터 로드
-    df = yf.download(tickers, period="2y", progress=False)['Close']
+    
+    # 🔥 [핵심 수정] 2년 제한(period="2y") 해제! 백테스트 시작점인 2018년부터 모든 역사를 스캔합니다.
+    df = yf.download(tickers, start="2018-01-01", progress=False)['Close']
     
     if df is None or df.empty:
         return None, None
@@ -52,7 +53,7 @@ def get_daily_signals():
         prices = df[ticker].values
         if len(prices) < LR_WINDOW + 1: continue
             
-        # 벡터화된 연산으로 전 기간 지표 한 번에 계산
+        # 벡터 연산으로 전체 기간 지표 초고속 계산
         ma_arr = pd.Series(prices).rolling(LR_WINDOW).mean().values
         slp_arr = pd.Series(prices).rolling(LR_WINDOW).apply(lambda y: np.sum(weights * y) / sum_w2, raw=True).values
         lr_cur_arr = ma_arr + slp_arr * ((LR_WINDOW - 1) / 2)
@@ -65,30 +66,30 @@ def get_daily_signals():
         params = PORTFOLIO_CONFIG[ticker]
         buy_sig, sell_sig, stop_drop = params['buy'], params['sell'], params['stop']
         
-        # 🔥 상태 시뮬레이션 (어제까지의 매매 상태를 앱이 스스로 추적)
         state = 0 # 0: 대기 중, 1: 보유 중
         entry_slope = 0
         last_buy_dt, last_buy_px = "-", 0
         last_sell_dt, last_sell_px = "-", 0
         
+        # 2018년부터 오늘까지의 모든 매매 히스토리 시뮬레이션
         for i in range(LR_WINDOW, len(prices) - 1):
             s, l, p = sig_arr[i], slope_pct_arr[i], prices[i]
             d_str = dates[i].strftime("%y/%m/%d")
             
             if state == 1:
-                # 익절 또는 손절(진입 기울기 대비 하락)
+                # 익절 또는 손절(상대적 하락)
                 if l < (entry_slope + stop_drop) or s >= sell_sig:
                     state = 0
                     last_sell_dt, last_sell_px = d_str, p
                     entry_slope = 0
             else:
-                # 신규 진입 (기울기 기억)
+                # 신규 진입 
                 if s <= buy_sig:
                     state = 1
                     last_buy_dt, last_buy_px = d_str, p
                     entry_slope = l
                     
-        # 🔥 오늘 종가 기준 '내일 액션' 판독
+        # 오늘(마지막 날) 종가 기준 내일 액션 판독
         cur_price = prices[-1]
         cur_sig = sig_arr[-1]
         cur_slp = slope_pct_arr[-1]
@@ -110,7 +111,6 @@ def get_daily_signals():
             else:
                 action = "⏳ 대기 중"
                 
-        # 출력 결과 정리 (소수점 2자리 문자열 포매팅)
         results.append({
             "종목명": params['name'],
             "액션 (내일 시초가)": action,
@@ -130,25 +130,26 @@ def get_daily_signals():
 st.set_page_config(page_title="13야수 트레이딩 레이더", layout="wide")
 
 st.title("🦁 13야수 실전 트레이딩 레이더")
-st.markdown("앱이 회원님의 과거 타점(기울기)을 스스로 기억하여 **정확한 손절/익절 시그널**을 띄워줍니다.")
+st.markdown("앱이 회원님의 2018년부터의 과거 타점(기울기)을 모두 추적하여 **정확한 손절/익절 시그널**을 띄워줍니다.")
 
-with st.spinner('히스토리를 추적하며 오늘 장마감 데이터를 분석 중입니다...'):
+with st.spinner('전체 매매 히스토리를 추적하며 오늘 장마감 데이터를 분석 중입니다...'):
     df_signals, last_date = get_daily_signals()
 
 if df_signals is not None and not df_signals.empty:
     st.success(f"✅ 데이터 업데이트 완료 (기준일: {last_date} 종가)")
     
-    # 🚨 정렬: 당장 행동해야 할 종목(매수/손절/익절)이 맨 위로 오도록
+    # 정렬 
     def sort_signal(val):
         if "매수" in val: return 1
         elif "손절" in val: return 2
         elif "익절" in val: return 3
-        else: return 4
+        elif "보유" in val: return 4
+        else: return 5
         
     df_signals['sort_key'] = df_signals['액션 (내일 시초가)'].apply(sort_signal)
     df_signals = df_signals.sort_values(['sort_key', '종목명']).drop('sort_key', axis=1).reset_index(drop=True)
     
-    # 🎨 색상 강조 스타일링
+    # 색상 스타일링
     def color_signal(val):
         if "매수" in str(val): return 'color: #ff4b4b; font-weight: bold; background-color: #ffe6e6;'
         elif "손절" in str(val): return 'color: #ffffff; font-weight: bold; background-color: #ff4b4b;'
