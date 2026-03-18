@@ -89,7 +89,7 @@ def get_daily_signals():
         
         if state == 1:
             stop_target = entry_slope + stop_drop
-            stop_target_str = f"하락 이탈선: {stop_target:.2f}%"
+            stop_target_str = f"{stop_target:.2f}%"
             sigma_display = f"{cur_sig:.2f} (매도: {sell_sig})"
             
             if cur_slp < stop_target:
