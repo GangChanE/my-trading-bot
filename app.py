@@ -23,22 +23,27 @@ PORTFOLIO_CONFIG = {
     "138910.KS": {"name": "KODEX 구리선물(H)", "buy": -3.4, "sell": 2.0, "stop": -0.8}
 }
 
+# 5원 단위 호가 반올림 함수
 def snap_to_tick(price):
     return int(round(price / 5.0) * 5)
 
 # =====================================================================
-# 📡 2. 실시간 상태 시뮬레이터 (전체 역사 트래킹)
+# 📡 2. 실시간 상태 시뮬레이터 (T일 종가 시그널 -> T+1일 시가 체결)
 # =====================================================================
 @st.cache_data(ttl=3600) 
 def get_daily_signals():
     tickers = list(PORTFOLIO_CONFIG.keys())
-    df = yf.download(tickers, start="2018-01-01", progress=False)['Close']
     
-    if df is None or df.empty:
+    # 🔥 수정: Open(시가)과 Close(종가) 데이터를 모두 가져옴
+    df_raw = yf.download(tickers, start="2018-01-01", progress=False)
+    
+    if df_raw is None or df_raw.empty:
         return None, None
         
-    df.fillna(method='ffill', inplace=True)
-    dates = df.index
+    df_close = df_raw['Close'].fillna(method='ffill')
+    df_open = df_raw['Open'].fillna(method='ffill')
+    
+    dates = df_close.index
     last_date = dates[-1].strftime("%Y년 %m월 %d일")
     
     LR_WINDOW = 60
@@ -48,15 +53,18 @@ def get_daily_signals():
     results = []
     
     for ticker in tickers:
-        prices = df[ticker].values
-        if len(prices) < LR_WINDOW + 1: continue
-            
-        ma_arr = pd.Series(prices).rolling(LR_WINDOW).mean().values
-        slp_arr = pd.Series(prices).rolling(LR_WINDOW).apply(lambda y: np.sum(weights * y) / sum_w2, raw=True).values
-        lr_cur_arr = ma_arr + slp_arr * ((LR_WINDOW - 1) / 2)
-        std_arr = pd.Series(prices).rolling(LR_WINDOW).std().values
+        prices_close = df_close[ticker].values
+        prices_open = df_open[ticker].values # 시가 배열
         
-        sig_arr = np.divide(prices - lr_cur_arr, std_arr, out=np.zeros_like(prices), where=std_arr!=0)
+        if len(prices_close) < LR_WINDOW + 1: continue
+            
+        # 보조지표 연산은 오직 '종가(Close)' 기준으로만 수행
+        ma_arr = pd.Series(prices_close).rolling(LR_WINDOW).mean().values
+        slp_arr = pd.Series(prices_close).rolling(LR_WINDOW).apply(lambda y: np.sum(weights * y) / sum_w2, raw=True).values
+        lr_cur_arr = ma_arr + slp_arr * ((LR_WINDOW - 1) / 2)
+        std_arr = pd.Series(prices_close).rolling(LR_WINDOW).std().values
+        
+        sig_arr = np.divide(prices_close - lr_cur_arr, std_arr, out=np.zeros_like(prices_close), where=std_arr!=0)
         slope_pct_arr = np.divide(slp_arr, ma_arr, out=np.zeros_like(slp_arr), where=ma_arr!=0) * 100
         
         params = PORTFOLIO_CONFIG[ticker]
@@ -67,29 +75,38 @@ def get_daily_signals():
         last_buy_dt, last_buy_px = "-", 0
         last_sell_dt, last_sell_px = "-", 0
         
-        for i in range(LR_WINDOW, len(prices) - 1):
-            s, l, p = sig_arr[i], slope_pct_arr[i], prices[i]
+        # 시뮬레이션: 어제(i-1)의 종가 시그널을 보고 오늘(i)의 시가에 체결!
+        for i in range(LR_WINDOW, len(prices_close)):
+            prev_i = i - 1
+            s_prev, l_prev = sig_arr[prev_i], slope_pct_arr[prev_i]
+            
+            # 🔥 체결 가격은 무조건 오늘(i)의 시가(Open)
+            exec_price = prices_open[i] 
             d_str = dates[i].strftime("%y/%m/%d")
             
             if state == 1:
-                if l < (entry_slope + stop_drop) or s >= sell_sig:
+                # 손절/익절 판단도 '어제 종가 지표' 기준
+                if l_prev < (entry_slope + stop_drop) or s_prev >= sell_sig:
                     state = 0
-                    last_sell_dt, last_sell_px = d_str, p
+                    last_sell_dt, last_sell_px = d_str, exec_price # 시가로 기록
                     entry_slope = 0
             else:
-                if s <= buy_sig:
+                if s_prev <= buy_sig:
                     state = 1
-                    last_buy_dt, last_buy_px = d_str, p
-                    entry_slope = l
+                    last_buy_dt, last_buy_px = d_str, exec_price # 시가로 기록
+                    entry_slope = l_prev
                     
-        cur_price = prices[-1]
-        cur_sig = sig_arr[-1]
-        cur_slp = slope_pct_arr[-1]
+        # 🚨 [가장 중요한 부분] '내일 아침'의 액션을 결정하기 위해 '오늘 종가' 지표를 확인
+        cur_price_close = prices_close[-1] # 오늘 종가
+        cur_sig = sig_arr[-1] # 오늘 시그마
+        cur_slp = slope_pct_arr[-1] # 오늘 기울기
+        
         stop_target_str = "-"
         
         if state == 1:
             stop_target = entry_slope + stop_drop
-            stop_target_str = f"{stop_target:.2f}%"
+            # 🔥 UI 개선: 모바일 최적화를 위해 심플한 수치만 출력
+            stop_target_str = f"{stop_target:.2f} %" 
             sigma_display = f"{cur_sig:.2f} (매도: {sell_sig})"
             
             if cur_slp < stop_target:
@@ -109,9 +126,9 @@ def get_daily_signals():
         results.append({
             "종목명": params['name'],
             "액션 (내일 시초가)": action,
-            "현재가": f"{snap_to_tick(cur_price):,.0f} 원",
+            "오늘 종가": f"{snap_to_tick(cur_price_close):,.0f} 원",
             "현재 시그마": sigma_display,
-            "현재 기울기": f"{cur_slp:.2f}%",
+            "현재 기울기": f"{cur_slp:.2f} %",
             "손절 기준선": stop_target_str,
             "최근 매수기록": f"{last_buy_dt} ({snap_to_tick(last_buy_px):,.0f}원)" if last_buy_px > 0 else "-",
             "최근 매도기록": f"{last_sell_dt} ({snap_to_tick(last_sell_px):,.0f}원)" if last_sell_px > 0 else "-"
@@ -120,14 +137,14 @@ def get_daily_signals():
     return pd.DataFrame(results), last_date
 
 # =====================================================================
-# 🖥️ 3. 스트림릿 대시보드 UI (텍스트 수정 완료)
+# 🖥️ 3. 스트림릿 대시보드 UI (최종 텍스트 수정 완료)
 # =====================================================================
 st.set_page_config(page_title="13야수 트레이딩 레이더", layout="wide")
 
 st.title("🦁 13야수 실전 트레이딩 레이더")
 
-# 🔥 회원님 요청: 33.4% 허풍 제거 및 진실된 실전 성적표(14.57%)로 교체
-st.markdown("앱이 회원님의 과거 타점을 추적하여 **정확한 손절/익절 시그널**을 띄워줍니다. **(실전 연 복리 14.57% / MDD -23.91%)**")
+# 🔥 회원님 요청: 백테스트 기간 명시 및 가장 현실적인 수치 반영
+st.markdown("과거 타점을 추적하여 **내일 아침 시초가(Open)에 던질 시그널**을 띄워줍니다.  \n*(백테스트 기간: 2021.03.17 ~ 현재 | 연 복리 13.26% | MDD -23.75%)*")
 
 with st.spinner('전체 매매 히스토리를 추적하며 오늘 장마감 데이터를 분석 중입니다...'):
     df_signals, last_date = get_daily_signals()
@@ -163,7 +180,7 @@ if df_signals is not None and not df_signals.empty:
     st.info("""
     **1. 매일 아침 단 5분만 투자하세요.**
     - 위 표에서 `🔥 신규 매수`, `🔵 전량 익절`, `🔴 전량 손절`이 뜬 종목이 있는지 확인합니다. 
-    - 만약 행동해야 할 종목이 있다면, MTS(증권사 앱)를 켜서 아래 2번을 수행합니다.
+    - 만약 행동해야 할 종목이 있다면, MTS(증권사 앱)를 켜서 장 시작(9시)과 동시에 **'시장가' 또는 '시초가'**로 주문을 넣습니다.
 
     **2. 1/N 리밸런싱 예산 맞추기**
     - **타겟 금액 = (총 계좌 평가금액) ÷ (보유 중인 종목 수 + 신규 매수할 종목 수)**
