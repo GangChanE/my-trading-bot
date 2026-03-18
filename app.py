@@ -8,11 +8,8 @@ from datetime import datetime
 # ⚙️ 1. 개편된 14야수 최종 파라미터 (게임산업 OUT, 골드/달러 IN)
 # =====================================================================
 PORTFOLIO_CONFIG = {
-    # [수비수 영입] 골드 & 달러
     "132030.KS": {"name": "KODEX 골드선물(H)", "buy": -2.6, "sell": 2.0, "stop": -0.4},
     "261240.KS": {"name": "KODEX 미국달러선물", "buy": -2.4, "sell": -1.0, "stop": -0.4},
-    
-    # [기존 야수 12인방]
     "091180.KS": {"name": "KODEX 자동차", "buy": -3.0, "sell": 1.8, "stop": -0.8},
     "117680.KS": {"name": "KODEX 철강", "buy": -3.1, "sell": 1.3, "stop": -0.8},
     "091160.KS": {"name": "KODEX 반도체", "buy": -3.1, "sell": 2.3, "stop": -0.8},
@@ -27,7 +24,6 @@ PORTFOLIO_CONFIG = {
     "138910.KS": {"name": "KODEX 구리선물(H)", "buy": -3.4, "sell": 2.0, "stop": -0.8}
 }
 
-# 5원 단위 호가 반올림 함수
 def snap_to_tick(price):
     return int(round(price / 5.0) * 5)
 
@@ -38,7 +34,6 @@ def snap_to_tick(price):
 def get_daily_signals():
     tickers = list(PORTFOLIO_CONFIG.keys())
     
-    # Open(시가)과 Close(종가) 데이터를 모두 가져옴
     df_raw = yf.download(tickers, start="2018-01-01", progress=False)
     
     if df_raw is None or df_raw.empty:
@@ -62,7 +57,6 @@ def get_daily_signals():
         
         if len(prices_close) < LR_WINDOW + 1: continue
             
-        # 보조지표 연산은 오직 '종가(Close)' 기준
         ma_arr = pd.Series(prices_close).rolling(LR_WINDOW).mean().values
         slp_arr = pd.Series(prices_close).rolling(LR_WINDOW).apply(lambda y: np.sum(weights * y) / sum_w2, raw=True).values
         lr_cur_arr = ma_arr + slp_arr * ((LR_WINDOW - 1) / 2)
@@ -79,7 +73,6 @@ def get_daily_signals():
         last_buy_dt, last_buy_px = "-", 0
         last_sell_dt, last_sell_px = "-", 0
         
-        # 어제(prev_i) 종가 시그널 -> 오늘(i) 시초가 체결 시뮬레이션
         for i in range(LR_WINDOW, len(prices_close)):
             prev_i = i - 1
             s_prev, l_prev = sig_arr[prev_i], slope_pct_arr[prev_i]
@@ -90,15 +83,14 @@ def get_daily_signals():
             if state == 1:
                 if l_prev < (entry_slope + stop_drop) or s_prev >= sell_sig:
                     state = 0
-                    last_sell_dt, last_sell_px = d_str, exec_price # 시초가 기록
+                    last_sell_dt, last_sell_px = d_str, exec_price 
                     entry_slope = 0
             else:
                 if s_prev <= buy_sig:
                     state = 1
-                    last_buy_dt, last_buy_px = d_str, exec_price # 시초가 기록
+                    last_buy_dt, last_buy_px = d_str, exec_price 
                     entry_slope = l_prev
                     
-        # '내일 아침'의 액션을 결정하는 '오늘 종가' 지표
         cur_price_close = prices_close[-1] 
         cur_sig = sig_arr[-1] 
         cur_slp = slope_pct_arr[-1] 
@@ -107,7 +99,6 @@ def get_daily_signals():
         
         if state == 1:
             stop_target = entry_slope + stop_drop
-            # 모바일 최적화 심플 출력
             stop_target_str = f"{stop_target:.2f} %" 
             sigma_display = f"{cur_sig:.2f} (매도: {sell_sig})"
             
@@ -139,13 +130,12 @@ def get_daily_signals():
     return pd.DataFrame(results), last_date
 
 # =====================================================================
-# 🖥️ 3. 스트림릿 대시보드 UI (14야수 버전)
+# 🖥️ 3. 스트림릿 대시보드 UI
 # =====================================================================
 st.set_page_config(page_title="14야수 트레이딩 레이더", layout="wide")
 
 st.title("🦁 14야수 실전 트레이딩 레이더")
 
-# 백테스트 성적표 (순수 현금 계좌 기준 적용)
 st.markdown("과거 타점을 추적하여 **내일 아침 시초가(Open)에 던질 시그널**을 띄워줍니다.  \n*(백테스트 기간: 2021.03.17 ~ 현재 | 연 복리 14.07% | MDD -23.75%)*")
 
 with st.spinner('전체 매매 히스토리를 추적하며 오늘 장마감 데이터를 분석 중입니다...'):
@@ -174,7 +164,8 @@ if df_signals is not None and not df_signals.empty:
     
     styled_df = df_signals.style.map(color_signal, subset=['액션 (내일 시초가)'])
     
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    # 🔥 표 높이를 600픽셀로 늘려서 14개 종목이 한 번에 보이게 설정!
+    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
     
     st.divider()
     
