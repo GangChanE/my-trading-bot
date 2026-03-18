@@ -5,39 +5,39 @@ import numpy as np
 from datetime import datetime
 
 # =====================================================================
-# ⚙️ 1. 최종 확정 파라미터 (종목코드 오류 완벽 수정)
+# ⚙️ 1. 진짜 13야수 최종 파라미터 (자동차 이웃 1위 + 12스윗)
 # =====================================================================
 PORTFOLIO_CONFIG = {
     # 🛡️ 수비수 (이웃 1위 방어형)
-    "117680.KS": {"name": "KODEX 철강", "buy": -3.1, "sell": 1.1, "stop": -2.2},
+    "091180.KS": {"name": "KODEX 자동차", "buy": -3.0, "sell": 1.8, "stop": -0.8},
     
     # ⚔️ 공격수 (스윗 1위 타격형)
-    "091160.KS": {"name": "KODEX 반도체", "buy": -3.1, "sell": 2.3, "stop": -4.0},
-    "305540.KS": {"name": "TIGER 2차전지테마", "buy": -3.3, "sell": 2.1, "stop": -2.4},
-    "139230.KS": {"name": "TIGER 200중공업", "buy": -2.4, "sell": -0.7, "stop": -0.4},
-    "091180.KS": {"name": "KODEX 자동차", "buy": -3.0, "sell": 1.9, "stop": -4.0},
-    "300950.KS": {"name": "KODEX 게임산업", "buy": -2.0, "sell": 1.9, "stop": -0.4}, # 🚨 118990(은행) -> 300950(게임) 수정 완료!
-    "371160.KS": {"name": "TIGER 차이나항셍테크", "buy": -2.5, "sell": -1.0, "stop": -2.0},
-    "157490.KS": {"name": "TIGER 소프트웨어", "buy": -3.4, "sell": 2.3, "stop": -2.2},
+    "117680.KS": {"name": "KODEX 철강", "buy": -3.1, "sell": 1.3, "stop": -0.8},
+    "091160.KS": {"name": "KODEX 반도체", "buy": -3.1, "sell": 2.3, "stop": -0.8},
+    "305540.KS": {"name": "TIGER 2차전지테마", "buy": -3.5, "sell": 1.7, "stop": -1.0},
+    "139230.KS": {"name": "TIGER 200중공업", "buy": -2.4, "sell": -0.6, "stop": -0.4},
+    "300950.KS": {"name": "KODEX 게임산업", "buy": -2.9, "sell": 2.0, "stop": -0.6},
+    "371160.KS": {"name": "TIGER 차이나항셍테크", "buy": -2.5, "sell": -1.0, "stop": -0.4},
+    "157490.KS": {"name": "TIGER 소프트웨어", "buy": -3.4, "sell": 2.3, "stop": -0.6},
     "261070.KS": {"name": "TIGER 코스닥150바이오", "buy": -3.4, "sell": 2.1, "stop": -0.4},
-    "245360.KS": {"name": "TIGER 차이나HSCEI", "buy": -3.7, "sell": -0.6, "stop": -0.4},
-    "261220.KS": {"name": "KODEX WTI원유선물(H)", "buy": -3.3, "sell": 1.4, "stop": -0.6}, # 🚨 130680(TIGER) -> 261220(KODEX) 수정 완료!
-    "144600.KS": {"name": "KODEX 은선물(H)", "buy": -4.1, "sell": 2.0, "stop": -2.2},
-    "138910.KS": {"name": "KODEX 구리선물(H)", "buy": -3.2, "sell": 0.9, "stop": -2.0}  # 🚨 138920(콩) -> 138910(구리) 수정 완료!
+    "245360.KS": {"name": "TIGER 차이나HSCEI", "buy": -4.3, "sell": -0.6, "stop": -0.4},
+    "261220.KS": {"name": "KODEX WTI원유선물(H)", "buy": -3.4, "sell": 2.6, "stop": -0.4},
+    "144600.KS": {"name": "KODEX 은선물(H)", "buy": -4.1, "sell": 2.2, "stop": -0.6},
+    "138910.KS": {"name": "KODEX 구리선물(H)", "buy": -3.4, "sell": 2.0, "stop": -0.8}
 }
 
-# ETF 호가 단위(5원) 반올림 함수
+# ETF 실전 호가 단위(5원) 반올림 함수
 def snap_to_tick(price):
     return int(round(price / 5.0) * 5)
 
 # =====================================================================
-# 📡 2. 실시간 상태 시뮬레이터
+# 📡 2. 실시간 상태 시뮬레이터 (전체 역사 트래킹)
 # =====================================================================
 @st.cache_data(ttl=3600) 
 def get_daily_signals():
     tickers = list(PORTFOLIO_CONFIG.keys())
     
-    # 수정종가(Adj Close) 왜곡 방지를 위해 데이터 수집
+    # 수정종가(Adj Close) 왜곡 방지 및 전체 매매기록 스캔을 위해 2018년부터 로드
     df = yf.download(tickers, start="2018-01-01", progress=False)['Close']
     
     if df is None or df.empty:
@@ -62,13 +62,14 @@ def get_daily_signals():
         lr_cur_arr = ma_arr + slp_arr * ((LR_WINDOW - 1) / 2)
         std_arr = pd.Series(prices).rolling(LR_WINDOW).std().values
         
+        # 0 나누기 방지
         sig_arr = np.divide(prices - lr_cur_arr, std_arr, out=np.zeros_like(prices), where=std_arr!=0)
         slope_pct_arr = np.divide(slp_arr, ma_arr, out=np.zeros_like(slp_arr), where=ma_arr!=0) * 100
         
         params = PORTFOLIO_CONFIG[ticker]
         buy_sig, sell_sig, stop_drop = params['buy'], params['sell'], params['stop']
         
-        state = 0 
+        state = 0 # 0: 대기 중, 1: 보유 중
         entry_slope = 0
         last_buy_dt, last_buy_px = "-", 0
         last_sell_dt, last_sell_px = "-", 0
@@ -88,14 +89,14 @@ def get_daily_signals():
                     last_buy_dt, last_buy_px = d_str, p
                     entry_slope = l
                     
-        # 오늘 종가 기준 액션 판독 및 UI 구성
+        # 오늘 종가 기준 액션 판독
         cur_price = prices[-1]
         cur_sig = sig_arr[-1]
         cur_slp = slope_pct_arr[-1]
         
         stop_target_str = "-"
         
-        # 🚨 UI 개선: 보유 중일 땐 (매도:), 대기 중일 땐 (매수:) 표기
+        # 🔥 UI 개선: 보유 중(매도 시그마), 대기 중(매수 시그마) 직관적 표기
         if state == 1:
             stop_target = entry_slope + stop_drop
             stop_target_str = f"하락 이탈선: {stop_target:.2f}%"
@@ -134,7 +135,7 @@ def get_daily_signals():
 st.set_page_config(page_title="13야수 트레이딩 레이더", layout="wide")
 
 st.title("🦁 13야수 실전 트레이딩 레이더")
-st.markdown("앱이 회원님의 과거 타점(기울기)을 모두 추적하여 **정확한 손절/익절 시그널**을 띄워줍니다.")
+st.markdown("앱이 회원님의 과거 타점(기울기)을 모두 추적하여 **정확한 손절/익절 시그널**을 띄워줍니다. (CAGR 33.4%)")
 
 with st.spinner('전체 매매 히스토리를 추적하며 오늘 장마감 데이터를 분석 중입니다...'):
     df_signals, last_date = get_daily_signals()
