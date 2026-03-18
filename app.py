@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import datetime
 
 # =====================================================================
 # ⚙️ 1. 최종 확정 파라미터 (13야수 하이브리드 V3)
@@ -23,12 +24,19 @@ PORTFOLIO_CONFIG = {
 }
 
 # =====================================================================
-# 🚀 2. 데이터 로더 (캐싱으로 웹 속도 최적화)
+# 🚀 2. 데이터 로더 (안전장치 추가)
 # =====================================================================
-@st.cache_data(ttl=86400) # 하루 한 번만 야후 파이낸스에서 다운로드
+@st.cache_data(ttl=86400) 
 def load_and_preprocess_data():
     tickers = list(PORTFOLIO_CONFIG.keys())
-    df_all = yf.download(tickers, start="2018-01-01", end="today", progress=False)['Close']
+    
+    # 🚨 end="today" 제거 (에러의 주범! 없애면 자동으로 최근 거래일까지 불러옴)
+    df_all = yf.download(tickers, start="2018-01-01", progress=False)['Close']
+    
+    # 데이터가 비어있을 경우를 대비한 안전장치
+    if df_all is None or df_all.empty:
+        return None, None, None
+
     df_all.fillna(method='ffill', inplace=True)
     
     LR_WINDOW = 60
@@ -64,7 +72,7 @@ def run_hybrid_portfolio(df_all, sigma_data, slope_data, start_capital=20000000)
     port = {t: {"shares": 0, "avg_price": 0} for t in tickers}
     
     for i in range(LR_WINDOW, len(dates)):
-        # [1] 매도 처리 (손익절)
+        # [1] 매도 처리 
         for ticker, p_info in port.items():
             if p_info["shares"] == 0: continue
             price = df_all[ticker].values[i]
@@ -80,7 +88,7 @@ def run_hybrid_portfolio(df_all, sigma_data, slope_data, start_capital=20000000)
                 cash += gross
                 p_info["shares"], p_info["avg_price"] = 0, 0
                 
-        # [2] 매수 대상 색출 (신규 시그널이 뜰 때만 리밸런싱)
+        # [2] 매수 대상 색출 
         new_signals = []
         held_tickers = []
         for ticker, p_info in port.items():
@@ -142,11 +150,22 @@ def run_hybrid_portfolio(df_all, sigma_data, slope_data, start_capital=20000000)
 st.set_page_config(page_title="13야수 퀀트 포트폴리오", layout="wide")
 
 st.title("🦁 13야수 하이브리드 포트폴리오 대시보드")
-st.markdown("회원님의 오리지널 로직 (트레일링 방어 + 1/N 자동 리밸런싱 + 현실 세금/수수료 반영)")
+st.markdown("회원님의 오리지널 로직 (트레일링 방어 + 1/N 동적 자본 할당 + 현실 세금/수수료 반영)")
 
-with st.spinner('데이터를 불러오고 백테스트를 수행 중입니다... (최초 1회 약 5~10초 소요)'):
+with st.spinner('야후 파이낸스에서 데이터를 불러오고 있습니다... (최초 1회 약 10~15초 소요)'):
     df_all, sigmas, slopes = load_and_preprocess_data()
+
+# 🚨 데이터 로드 실패 시 에러창을 띄우고 정지 (화면이 하얗게 뻗는 것 방지)
+if df_all is None or df_all.empty:
+    st.error("🚨 야후 파이낸스 서버 접속이 지연되고 있습니다. 잠시 후 새로고침(F5)을 눌러주세요.")
+    st.stop()
+
+with st.spinner('백테스트 연산 중입니다...'):
     dates, equity_curve = run_hybrid_portfolio(df_all, sigmas, slopes)
+
+if len(equity_curve) == 0:
+    st.error("🚨 연산 결과가 없습니다. 데이터 범위가 너무 짧을 수 있습니다.")
+    st.stop()
 
 # --- 결과 계산 ---
 START_CAPITAL = 20000000
@@ -157,7 +176,7 @@ mdd = ((np.array(equity_curve) - peak) / peak).min() * 100
 
 # --- 화면 상단 요약 대시보드 ---
 col1, col2, col3 = st.columns(3)
-col1.metric("▶ 총 운용 자산", f"{final_capital:,.0f} 원", f"수익금: {final_capital - START_CAPITAL:,.0f} 원")
+col1.metric("▶ 총 운용 자산", f"{final_capital:,.0f} 원", f"순수익: {final_capital - START_CAPITAL:,.0f} 원")
 col2.metric("🚀 연 복리 (CAGR)", f"{cagr:.2f} %")
 col3.metric("📉 최대 낙폭 (MDD)", f"{mdd:.2f} %", delta_color="inverse")
 
@@ -168,4 +187,4 @@ st.subheader("📈 포트폴리오 자산 성장 곡선")
 chart_data = pd.DataFrame({'총 자산(원)': equity_curve}, index=dates)
 st.line_chart(chart_data, use_container_width=True)
 
-st.success("데이터 로딩 및 시뮬레이션 완료!")
+st.success("데이터 로딩 및 시뮬레이션 완료! (매일 최신 데이터로 업데이트 됩니다)")
