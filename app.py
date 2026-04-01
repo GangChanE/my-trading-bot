@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime
 
 # =====================================================================
-# ⚙️ 1. 개편된 14야수 최종 파라미터 (게임산업 OUT, 골드/달러 IN)
+# ⚙️ 1. 개편된 14야수 최종 파라미터
 # =====================================================================
 PORTFOLIO_CONFIG = {
     "132030.KS": {"name": "KODEX 골드선물(H)", "buy": -2.6, "sell": 2.0, "stop": -0.4},
@@ -28,37 +28,30 @@ def snap_to_tick(price):
     return int(round(price / 5.0) * 5)
 
 # =====================================================================
-# 📡 2. 실시간 상태 시뮬레이터 (T일 종가 시그널 -> T+1일 시가 체결)
+# 📡 2. 실시간 상태 시뮬레이터
 # =====================================================================
 @st.cache_data(ttl=3600) 
 def get_daily_signals():
     tickers = list(PORTFOLIO_CONFIG.keys())
     
-    # 데이터 다운로드 (멀티 인덱스 대응을 위해 df_raw 그대로 받기)
     df_raw = yf.download(tickers, start="2018-01-01", progress=False)
     
     if df_raw is None or df_raw.empty:
         return None, None
         
-    # 🚨 [수정 포인트] yfinance 업데이트 방어 로직 (멀티 인덱스 및 컬럼 누락 처리)
     if isinstance(df_raw.columns, pd.MultiIndex):
-        # 종가(Close) 처리
         if 'Adj Close' in df_raw.columns.levels[0]:
-            df_close = df_raw['Adj Close']
+            df_close = df_raw['Adj Close'].copy()
         else:
-            df_close = df_raw['Close']
-            
-        # 시가(Open) 처리
-        df_open = df_raw['Open']
+            df_close = df_raw['Close'].copy()
+        df_open = df_raw['Open'].copy()
     else:
-        # 멀티 인덱스가 아닐 경우의 방어
         if 'Adj Close' in df_raw.columns:
-            df_close = df_raw['Adj Close']
+            df_close = df_raw['Adj Close'].copy()
         else:
-            df_close = df_raw['Close']
-        df_open = df_raw['Open']
+            df_close = df_raw['Close'].copy()
+        df_open = df_raw['Open'].copy()
 
-    # 결측치 채우기
     df_close.fillna(method='ffill', inplace=True)
     df_open.fillna(method='ffill', inplace=True)
     
@@ -72,23 +65,41 @@ def get_daily_signals():
     results = []
     
     for ticker in tickers:
-        # 혹시 특정 종목 데이터가 누락되었을 경우 스킵
         if ticker not in df_close.columns or ticker not in df_open.columns:
             continue
             
-        prices_close = df_close[ticker].values
-        prices_open = df_open[ticker].values
+        # 🚨 [수정 포인트] 결측치를 제거(dropna)하여 진짜 유효한 데이터만 남김
+        valid_close = df_close[ticker].dropna()
+        valid_open = df_open[ticker].dropna()
         
-        # 데이터가 LR_WINDOW(60일)보다 적으면 스킵
-        if len(prices_close) < LR_WINDOW + 1: continue
+        # 유효한 데이터가 창 크기(60)보다 적거나, shape이 일치하지 않으면 무조건 스킵!
+        if len(valid_close) < LR_WINDOW + 1 or len(valid_close) != len(valid_open):
+            results.append({
+                "종목명": PORTFOLIO_CONFIG[ticker]['name'],
+                "액션 (내일 시초가)": "⚠️ 데이터 부족",
+                "오늘 종가": "-",
+                "현재 시그마": "-",
+                "현재 기울기": "-",
+                "손절 기준선": "-",
+                "최근 매수기록": "-",
+                "최근 매도기록": "-"
+            })
+            continue
+            
+        prices_close = valid_close.values
+        prices_open = valid_open.values
             
         ma_arr = pd.Series(prices_close).rolling(LR_WINDOW).mean().values
         slp_arr = pd.Series(prices_close).rolling(LR_WINDOW).apply(lambda y: np.sum(weights * y) / sum_w2, raw=True).values
         lr_cur_arr = ma_arr + slp_arr * ((LR_WINDOW - 1) / 2)
         std_arr = pd.Series(prices_close).rolling(LR_WINDOW).std().values
         
-        sig_arr = np.divide(prices_close - lr_cur_arr, std_arr, out=np.zeros_like(prices_close), where=std_arr!=0)
-        slope_pct_arr = np.divide(slp_arr, ma_arr, out=np.zeros_like(slp_arr), where=ma_arr!=0) * 100
+        # numpy 연산 시 shape 확인을 위해 한 번 더 안전장치
+        try:
+            sig_arr = np.divide(prices_close - lr_cur_arr, std_arr, out=np.zeros_like(prices_close), where=std_arr!=0)
+            slope_pct_arr = np.divide(slp_arr, ma_arr, out=np.zeros_like(slp_arr), where=ma_arr!=0) * 100
+        except ValueError:
+            continue
         
         params = PORTFOLIO_CONFIG[ticker]
         buy_sig, sell_sig, stop_drop = params['buy'], params['sell'], params['stop']
@@ -98,12 +109,15 @@ def get_daily_signals():
         last_buy_dt, last_buy_px = "-", 0
         last_sell_dt, last_sell_px = "-", 0
         
+        # 인덱스 접근 시 에러 방지를 위해 valid_close의 실제 인덱스 사용
+        valid_dates = valid_close.index
+
         for i in range(LR_WINDOW, len(prices_close)):
             prev_i = i - 1
             s_prev, l_prev = sig_arr[prev_i], slope_pct_arr[prev_i]
             
             exec_price = prices_open[i] 
-            d_str = dates[i].strftime("%y/%m/%d")
+            d_str = valid_dates[i].strftime("%y/%m/%d")
             
             if state == 1:
                 if l_prev < (entry_slope + stop_drop) or s_prev >= sell_sig:
@@ -189,7 +203,6 @@ if df_signals is not None and not df_signals.empty:
     
     styled_df = df_signals.style.map(color_signal, subset=['액션 (내일 시초가)'])
     
-    # 🔥 표 높이를 600픽셀로 늘려서 14개 종목이 한 번에 보이게 설정!
     st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
     
     st.divider()
