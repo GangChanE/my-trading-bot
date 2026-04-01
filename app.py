@@ -154,4 +154,16 @@ st.set_page_config(page_title="14야수 트레이딩 레이더", layout="wide")
 
 st.title("🦁 14야수 실전 트레이딩 레이더 (디버그 모드)")
 
-st.markdown("과거 타점을 추적하여 **내일 아침 시초가(Open)
+st.markdown("과거 타점을 추적하여 **내일 아침 시초가(Open)에 던질 시그널**을 띄워줍니다.")
+
+with st.spinner('전체 매매 히스토리를 추적하며 장마감 데이터를 분석 중입니다...'):
+    df_signals, last_date = get_daily_signals()
+
+if df_signals is not None and not df_signals.empty:
+    st.success(f"✅ 분석 완료 (가장 최근 정상 데이터 기준: {last_date})")
+    
+    # 에러 원문이 길 수 있으므로 표 설정을 약간 조정
+    st.dataframe(df_signals, use_container_width=True, hide_index=True, height=600)
+    
+else:
+    st.error("전체 시스템이 멈췄습니다. 데이터를 아예 가져오지 못했습니다.")
