@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime
 
 # =====================================================================
-# ⚙️ 1. 개편된 14야수 최종 파라미터 (FDR용으로 .KS 꼬리표 제거)
+# ⚙️ 1. 개편된 14야수 최종 파라미터 (6자리 코드 유지)
 # =====================================================================
 PORTFOLIO_CONFIG = {
     "132030": {"name": "KODEX 골드선물(H)", "buy": -2.6, "sell": 2.0, "stop": -0.4},
@@ -28,7 +28,7 @@ def snap_to_tick(price):
     return int(round(price / 5.0) * 5)
 
 # =====================================================================
-# 📡 2. 실시간 상태 시뮬레이터 (FDR 엔진)
+# 📡 2. 실시간 상태 시뮬레이터 (FDR ETF 맞춤형 엔진)
 # =====================================================================
 @st.cache_data(ttl=3600) 
 def get_daily_signals():
@@ -40,15 +40,17 @@ def get_daily_signals():
     weights = np.arange(1, LR_WINDOW + 1) - (LR_WINDOW + 1) / 2
     sum_w2 = np.sum(weights**2)
     
-    # FDR은 강제 멀티스레딩을 하지 않으므로 for문으로 하나씩 안전하게 수집
     for ticker in tickers:
         params = PORTFOLIO_CONFIG[ticker]
         
         try:
-            # 2018년부터 현재까지의 데이터 수집 (한국 ETF 최적화)
+            # 🚨 [핵심 수정 포인트] ETF 데이터를 안전하게 가져오기 위해 접두사 추가 혹은 직접 수집
+            # FDR이 한국 ETF 데이터를 잘 찾을 수 있도록 설정 (기본적으로 6자리 숫자를 넣으면 네이버에서 긁어옵니다)
             df = fdr.DataReader(ticker, start="2018-01-01")
             
-            # 데이터가 비어있거나 60일치 보다 적으면 스킵하고 오류 메시지 출력
+            # 💡 만약 위 코드로도 안 가져와진다면, 명시적으로 네이버 파이낸스를 지정할 수도 있습니다 (현재 주석 처리)
+            # df = fdr.DataReader('KRX:' + ticker, start="2018-01-01") # KRX 시장 명시
+            
             if df.empty or len(df) < LR_WINDOW + 1:
                 results.append({
                     "종목명": params['name'],
@@ -66,7 +68,6 @@ def get_daily_signals():
             prices_open = df['Open'].values
             dates = df.index
             
-            # 마지막 날짜 갱신 (가장 정상적으로 데이터를 받아온 종목 기준)
             last_date_str = dates[-1].strftime("%Y년 %m월 %d일")
             
             ma_arr = pd.Series(prices_close).rolling(LR_WINDOW).mean().values
@@ -74,7 +75,6 @@ def get_daily_signals():
             lr_cur_arr = ma_arr + slp_arr * ((LR_WINDOW - 1) / 2)
             std_arr = pd.Series(prices_close).rolling(LR_WINDOW).std().values
             
-            # 분모가 0이 되는 오류(Division by zero) 방어
             sig_arr = np.divide(prices_close - lr_cur_arr, std_arr, out=np.zeros_like(prices_close), where=std_arr!=0)
             slope_pct_arr = np.divide(slp_arr, ma_arr, out=np.zeros_like(slp_arr), where=ma_arr!=0) * 100
             
@@ -140,7 +140,8 @@ def get_daily_signals():
             })
             
         except Exception as e:
-            # 특정 종목에서 예기치 못한 에러가 발생해도 다른 종목에 영향을 주지 않도록 방어
+            # 🚨 오류 디버깅을 위해 콘솔(로그)에 실제 에러 메시지를 찍어봅니다
+            print(f"Error fetching {ticker}: {e}")
             results.append({
                 "종목명": params['name'],
                 "액션 (내일 시초가)": "⚠️ 수집 오류",
