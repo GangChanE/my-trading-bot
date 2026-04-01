@@ -34,13 +34,33 @@ def snap_to_tick(price):
 def get_daily_signals():
     tickers = list(PORTFOLIO_CONFIG.keys())
     
+    # 데이터 다운로드 (멀티 인덱스 대응을 위해 df_raw 그대로 받기)
     df_raw = yf.download(tickers, start="2018-01-01", progress=False)
     
     if df_raw is None or df_raw.empty:
         return None, None
         
-    df_close = df_raw['Close'].fillna(method='ffill')
-    df_open = df_raw['Open'].fillna(method='ffill')
+    # 🚨 [수정 포인트] yfinance 업데이트 방어 로직 (멀티 인덱스 및 컬럼 누락 처리)
+    if isinstance(df_raw.columns, pd.MultiIndex):
+        # 종가(Close) 처리
+        if 'Adj Close' in df_raw.columns.levels[0]:
+            df_close = df_raw['Adj Close']
+        else:
+            df_close = df_raw['Close']
+            
+        # 시가(Open) 처리
+        df_open = df_raw['Open']
+    else:
+        # 멀티 인덱스가 아닐 경우의 방어
+        if 'Adj Close' in df_raw.columns:
+            df_close = df_raw['Adj Close']
+        else:
+            df_close = df_raw['Close']
+        df_open = df_raw['Open']
+
+    # 결측치 채우기
+    df_close.fillna(method='ffill', inplace=True)
+    df_open.fillna(method='ffill', inplace=True)
     
     dates = df_close.index
     last_date = dates[-1].strftime("%Y년 %m월 %d일")
@@ -52,9 +72,14 @@ def get_daily_signals():
     results = []
     
     for ticker in tickers:
+        # 혹시 특정 종목 데이터가 누락되었을 경우 스킵
+        if ticker not in df_close.columns or ticker not in df_open.columns:
+            continue
+            
         prices_close = df_close[ticker].values
         prices_open = df_open[ticker].values
         
+        # 데이터가 LR_WINDOW(60일)보다 적으면 스킵
         if len(prices_close) < LR_WINDOW + 1: continue
             
         ma_arr = pd.Series(prices_close).rolling(LR_WINDOW).mean().values
