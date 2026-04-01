@@ -34,24 +34,32 @@ def snap_to_tick(price):
 def get_daily_signals():
     tickers = list(PORTFOLIO_CONFIG.keys())
     
-    # 🚨 [수정 포인트] threads=False 추가! 스트림릿 클라우드 스레드 제한 에러 방지
-    df_raw = yf.download(tickers, start="2018-01-01", progress=False, threads=False)
+    # 🚨 [근본 해결책] yfinance 멀티스레딩 강제 차단을 위한 직렬 다운로드
+    close_data = {}
+    open_data = {}
     
-    if df_raw is None or df_raw.empty:
+    for ticker in tickers:
+        try:
+            # 한 번에 한 종목씩만 안전하게 다운로드
+            df_single = yf.download(ticker, start="2018-01-01", progress=False)
+            
+            if df_single is not None and not df_single.empty:
+                # 싱글 티커 다운로드 시 구조가 단순해져서 멀티인덱스 에러도 피할 수 있음
+                if 'Adj Close' in df_single.columns:
+                    close_data[ticker] = df_single['Adj Close']
+                else:
+                    close_data[ticker] = df_single['Close']
+                
+                open_data[ticker] = df_single['Open']
+        except Exception:
+            pass # 하나가 실패해도 전체가 멈추지 않도록 예외 처리
+            
+    # 각각 수집한 종목 데이터를 하나의 표(DataFrame)로 합침
+    if not close_data:
         return None, None
         
-    if isinstance(df_raw.columns, pd.MultiIndex):
-        if 'Adj Close' in df_raw.columns.levels[0]:
-            df_close = df_raw['Adj Close'].copy()
-        else:
-            df_close = df_raw['Close'].copy()
-        df_open = df_raw['Open'].copy()
-    else:
-        if 'Adj Close' in df_raw.columns:
-            df_close = df_raw['Adj Close'].copy()
-        else:
-            df_close = df_raw['Close'].copy()
-        df_open = df_raw['Open'].copy()
+    df_close = pd.DataFrame(close_data)
+    df_open = pd.DataFrame(open_data)
 
     df_close.fillna(method='ffill', inplace=True)
     df_open.fillna(method='ffill', inplace=True)
@@ -174,7 +182,7 @@ st.title("🦁 14야수 실전 트레이딩 레이더")
 
 st.markdown("과거 타점을 추적하여 **내일 아침 시초가(Open)에 던질 시그널**을 띄워줍니다.  \n*(백테스트 기간: 2021.03.17 ~ 현재 | 연 복리 14.07% | MDD -23.75%)*")
 
-with st.spinner('전체 매매 히스토리를 추적하며 오늘 장마감 데이터를 분석 중입니다...'):
+with st.spinner('전체 매매 히스토리를 추적하며 오늘 장마감 데이터를 분석 중입니다... (데이터 안전 수집 중)'):
     df_signals, last_date = get_daily_signals()
 
 if df_signals is not None and not df_signals.empty:
