@@ -34,7 +34,8 @@ def snap_to_tick(price):
 def get_daily_signals():
     tickers = list(PORTFOLIO_CONFIG.keys())
     
-    df_raw = yf.download(tickers, start="2018-01-01", progress=False)
+    # 🚨 [수정 포인트] threads=False 추가! 스트림릿 클라우드 스레드 제한 에러 방지
+    df_raw = yf.download(tickers, start="2018-01-01", progress=False, threads=False)
     
     if df_raw is None or df_raw.empty:
         return None, None
@@ -68,11 +69,9 @@ def get_daily_signals():
         if ticker not in df_close.columns or ticker not in df_open.columns:
             continue
             
-        # 🚨 [수정 포인트] 결측치를 제거(dropna)하여 진짜 유효한 데이터만 남김
         valid_close = df_close[ticker].dropna()
         valid_open = df_open[ticker].dropna()
         
-        # 유효한 데이터가 창 크기(60)보다 적거나, shape이 일치하지 않으면 무조건 스킵!
         if len(valid_close) < LR_WINDOW + 1 or len(valid_close) != len(valid_open):
             results.append({
                 "종목명": PORTFOLIO_CONFIG[ticker]['name'],
@@ -94,7 +93,6 @@ def get_daily_signals():
         lr_cur_arr = ma_arr + slp_arr * ((LR_WINDOW - 1) / 2)
         std_arr = pd.Series(prices_close).rolling(LR_WINDOW).std().values
         
-        # numpy 연산 시 shape 확인을 위해 한 번 더 안전장치
         try:
             sig_arr = np.divide(prices_close - lr_cur_arr, std_arr, out=np.zeros_like(prices_close), where=std_arr!=0)
             slope_pct_arr = np.divide(slp_arr, ma_arr, out=np.zeros_like(slp_arr), where=ma_arr!=0) * 100
@@ -109,7 +107,6 @@ def get_daily_signals():
         last_buy_dt, last_buy_px = "-", 0
         last_sell_dt, last_sell_px = "-", 0
         
-        # 인덱스 접근 시 에러 방지를 위해 valid_close의 실제 인덱스 사용
         valid_dates = valid_close.index
 
         for i in range(LR_WINDOW, len(prices_close)):
