@@ -68,8 +68,8 @@ def get_daily_signals():
                 continue
             
             # 결측치 채우기 (에러가 나던 지점 - 이제 평탄화되어 안전함)
-            df['Close'] = df['Close'].fillna(method='ffill')
-            df['Open'] = df['Open'].fillna(method='ffill')
+            df['Close'] = df['Close'].ffill()
+            df['Open'] = df['Open'].ffill()
             
             prices_close = df['Close'].values
             prices_open = df['Open'].values
