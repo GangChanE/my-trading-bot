@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime
 
 # =====================================================================
-# ⚙️ 1. 개편된 14야수 최종 파라미터 (.KS 꼬리표 다시 부착)
+# ⚙️ 1. 개편된 14야수 최종 파라미터 (.KS 꼬리표 유지)
 # =====================================================================
 PORTFOLIO_CONFIG = {
     "132030.KS": {"name": "KODEX 골드선물(H)", "buy": -2.6, "sell": 2.0, "stop": -0.4},
@@ -28,7 +28,7 @@ def snap_to_tick(price):
     return int(round(price / 5.0) * 5)
 
 # =====================================================================
-# 📡 2. 실시간 상태 시뮬레이터 (yfinance Single Thread 엔진)
+# 📡 2. 실시간 상태 시뮬레이터 (평탄화 방어 로직 탑재)
 # =====================================================================
 @st.cache_data(ttl=3600) 
 def get_daily_signals():
@@ -44,13 +44,19 @@ def get_daily_signals():
         params = PORTFOLIO_CONFIG[ticker]
         
         try:
-            # 🚨 [핵심] yfinance로 단일 종목씩만 호출 (멀티스레딩 원천 차단)
             ticker_obj = yf.Ticker(ticker)
             df = ticker_obj.history(start="2018-01-01")
             
-            # timezone 정보 제거 (에러 방지)
+            # timezone 정보 제거
             if df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
+                
+            # 🚨 [핵심 방어 로직] 데이터의 컬럼(이름표)이 멀티인덱스(2줄)로 꼬여있으면 강제로 1줄로 납작하게 만듭니다!
+            if isinstance(df.columns, pd.MultiIndex):
+                # 'Close', 'Open' 등의 최상위 이름표만 남기고 밑에 달린 꼬리표들은 다 잘라버립니다.
+                df.columns = df.columns.get_level_values(0)
+                # 혹시 중복된 이름표가 생기면 첫 번째 것만 사용합니다.
+                df = df.loc[:, ~df.columns.duplicated()]
             
             if df.empty or len(df) < LR_WINDOW + 1:
                 results.append({
@@ -61,7 +67,7 @@ def get_daily_signals():
                 })
                 continue
             
-            # 결측치 방어
+            # 결측치 채우기 (에러가 나던 지점 - 이제 평탄화되어 안전함)
             df['Close'] = df['Close'].fillna(method='ffill')
             df['Open'] = df['Open'].fillna(method='ffill')
             
