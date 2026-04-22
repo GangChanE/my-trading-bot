@@ -1,35 +1,34 @@
 import streamlit as st
-import FinanceDataReader as fdr
+import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import traceback # 🚨 에러 원문 추적용 모듈 추가
 
 # =====================================================================
-# ⚙️ 1. 개편된 14야수 최종 파라미터 
+# ⚙️ 1. 개편된 14야수 최종 파라미터 (.KS 꼬리표 다시 부착)
 # =====================================================================
 PORTFOLIO_CONFIG = {
-    "132030": {"name": "KODEX 골드선물(H)", "buy": -2.6, "sell": 2.0, "stop": -0.4},
-    "261240": {"name": "KODEX 미국달러선물", "buy": -2.4, "sell": -1.0, "stop": -0.4},
-    "091180": {"name": "KODEX 자동차", "buy": -3.0, "sell": 1.8, "stop": -0.8},
-    "117680": {"name": "KODEX 철강", "buy": -3.1, "sell": 1.3, "stop": -0.8},
-    "091160": {"name": "KODEX 반도체", "buy": -3.1, "sell": 2.3, "stop": -0.8},
-    "305540": {"name": "TIGER 2차전지테마", "buy": -3.5, "sell": 1.7, "stop": -1.0},
-    "139230": {"name": "TIGER 200중공업", "buy": -2.4, "sell": -0.6, "stop": -0.4},
-    "371160": {"name": "TIGER 차이나항셍테크", "buy": -2.5, "sell": -1.0, "stop": -0.4},
-    "157490": {"name": "TIGER 소프트웨어", "buy": -3.4, "sell": 2.3, "stop": -0.6},
-    "261070": {"name": "TIGER 코스닥150바이오", "buy": -3.4, "sell": 2.1, "stop": -0.4},
-    "245360": {"name": "TIGER 차이나HSCEI", "buy": -4.3, "sell": -0.6, "stop": -0.4},
-    "261220": {"name": "KODEX WTI원유선물(H)", "buy": -3.4, "sell": 2.6, "stop": -0.4},
-    "144600": {"name": "KODEX 은선물(H)", "buy": -4.1, "sell": 2.2, "stop": -0.6},
-    "138910": {"name": "KODEX 구리선물(H)", "buy": -3.4, "sell": 2.0, "stop": -0.8}
+    "132030.KS": {"name": "KODEX 골드선물(H)", "buy": -2.6, "sell": 2.0, "stop": -0.4},
+    "261240.KS": {"name": "KODEX 미국달러선물", "buy": -2.4, "sell": -1.0, "stop": -0.4},
+    "091180.KS": {"name": "KODEX 자동차", "buy": -3.0, "sell": 1.8, "stop": -0.8},
+    "117680.KS": {"name": "KODEX 철강", "buy": -3.1, "sell": 1.3, "stop": -0.8},
+    "091160.KS": {"name": "KODEX 반도체", "buy": -3.1, "sell": 2.3, "stop": -0.8},
+    "305540.KS": {"name": "TIGER 2차전지테마", "buy": -3.5, "sell": 1.7, "stop": -1.0},
+    "139230.KS": {"name": "TIGER 200중공업", "buy": -2.4, "sell": -0.6, "stop": -0.4},
+    "371160.KS": {"name": "TIGER 차이나항셍테크", "buy": -2.5, "sell": -1.0, "stop": -0.4},
+    "157490.KS": {"name": "TIGER 소프트웨어", "buy": -3.4, "sell": 2.3, "stop": -0.6},
+    "261070.KS": {"name": "TIGER 코스닥150바이오", "buy": -3.4, "sell": 2.1, "stop": -0.4},
+    "245360.KS": {"name": "TIGER 차이나HSCEI", "buy": -4.3, "sell": -0.6, "stop": -0.4},
+    "261220.KS": {"name": "KODEX WTI원유선물(H)", "buy": -3.4, "sell": 2.6, "stop": -0.4},
+    "144600.KS": {"name": "KODEX 은선물(H)", "buy": -4.1, "sell": 2.2, "stop": -0.6},
+    "138910.KS": {"name": "KODEX 구리선물(H)", "buy": -3.4, "sell": 2.0, "stop": -0.8}
 }
 
 def snap_to_tick(price):
     return int(round(price / 5.0) * 5)
 
 # =====================================================================
-# 📡 2. 실시간 상태 시뮬레이터 (에러 추적기 탑재)
+# 📡 2. 실시간 상태 시뮬레이터 (yfinance Single Thread 엔진)
 # =====================================================================
 @st.cache_data(ttl=3600) 
 def get_daily_signals():
@@ -45,17 +44,24 @@ def get_daily_signals():
         params = PORTFOLIO_CONFIG[ticker]
         
         try:
-            df = fdr.DataReader(ticker, start="2018-01-01")
+            # 🚨 [핵심] yfinance로 단일 종목씩만 호출 (멀티스레딩 원천 차단)
+            ticker_obj = yf.Ticker(ticker)
+            df = ticker_obj.history(start="2018-01-01")
+            
+            # timezone 정보 제거 (에러 방지)
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
             
             if df.empty or len(df) < LR_WINDOW + 1:
                 results.append({
                     "종목명": params['name'],
-                    "액션 (내일 시초가)": f"⚠️ 데이터 60개 미만 (현재 {len(df)}개)",
+                    "액션 (내일 시초가)": f"⚠️ 데이터 부족 (현재 {len(df)}개)",
                     "오늘 종가": "-", "현재 시그마": "-", "현재 기울기": "-", 
                     "손절 기준선": "-", "최근 매수기록": "-", "최근 매도기록": "-"
                 })
                 continue
             
+            # 결측치 방어
             df['Close'] = df['Close'].fillna(method='ffill')
             df['Open'] = df['Open'].fillna(method='ffill')
             
@@ -135,7 +141,6 @@ def get_daily_signals():
             })
             
         except Exception as e:
-            # 🚨 [핵심 변경점] 뭉뚱그린 에러 메시지 대신 실제 에러 원문을 표에 때려 박습니다.
             error_msg = str(e)
             results.append({
                 "종목명": params['name'],
@@ -152,18 +157,50 @@ def get_daily_signals():
 # =====================================================================
 st.set_page_config(page_title="14야수 트레이딩 레이더", layout="wide")
 
-st.title("🦁 14야수 실전 트레이딩 레이더 (디버그 모드)")
+st.title("🦁 14야수 실전 트레이딩 레이더")
 
-st.markdown("과거 타점을 추적하여 **내일 아침 시초가(Open)에 던질 시그널**을 띄워줍니다.")
+st.markdown("""과거 타점을 추적하여 **내일 아침 시초가(Open)에 던질 시그널**을 띄워줍니다.  \n*(백테스트 기간: 2021.03.17 ~ 현재 | 연 복리 14.07% | MDD -23.75%)*""")
 
-with st.spinner('전체 매매 히스토리를 추적하며 장마감 데이터를 분석 중입니다...'):
+with st.spinner('전체 매매 히스토리를 추적하며 장마감 데이터를 분석 중입니다... (yfinance 단일 스레드 모드)'):
     df_signals, last_date = get_daily_signals()
 
 if df_signals is not None and not df_signals.empty:
     st.success(f"✅ 분석 완료 (가장 최근 정상 데이터 기준: {last_date})")
     
-    # 에러 원문이 길 수 있으므로 표 설정을 약간 조정
-    st.dataframe(df_signals, use_container_width=True, hide_index=True, height=600)
+    def sort_signal(val):
+        if "매수" in val: return 1
+        elif "손절" in val: return 2
+        elif "익절" in val: return 3
+        elif "보유" in val: return 4
+        else: return 5
+        
+    df_signals['sort_key'] = df_signals['액션 (내일 시초가)'].apply(sort_signal)
+    df_signals = df_signals.sort_values(['sort_key', '종목명']).drop('sort_key', axis=1).reset_index(drop=True)
     
+    def color_signal(val):
+        if "매수" in str(val): return 'color: #ff4b4b; font-weight: bold; background-color: #ffe6e6;'
+        elif "손절" in str(val): return 'color: #ffffff; font-weight: bold; background-color: #ff4b4b;'
+        elif "익절" in str(val): return 'color: #ffffff; font-weight: bold; background-color: #0068c9;'
+        elif "보유" in str(val): return 'color: #008000; font-weight: bold;'
+        elif "대기" in str(val): return 'color: #808080;'
+        return ''
+    
+    styled_df = df_signals.style.map(color_signal, subset=['액션 (내일 시초가)'])
+    
+    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
+    
+    st.divider()
+    
+    st.subheader("💡 섀넌의 악마 (1/N 강제 리밸런싱) 실천 가이드")
+    st.info("""
+    **1. 매일 아침 단 5분만 투자하세요.**
+    - 위 표에서 `🔥 신규 매수`, `🔵 전량 익절`, `🔴 전량 손절`이 뜬 종목이 있는지 확인합니다. 
+    - 만약 행동해야 할 종목이 있다면, MTS(증권사 앱)를 켜서 장 시작(9시)과 동시에 **'시장가' 또는 '시초가'**로 주문을 넣습니다.
+
+    **2. 1/N 리밸런싱 예산 맞추기**
+    - **타겟 금액 = (총 계좌 평가금액) ÷ (보유 중인 종목 수 + 신규 매수할 종목 수)**
+    - 익절/손절 종목은 시초가에 전량 던져 현금을 확보합니다.
+    - 기존 보유 종목 중 수익이 나서 비중이 커진 것은 타겟 금액만큼 덜어내고(매도), 부족해진 종목과 신규 진입 종목은 타겟 금액만큼 채워 넣습니다(매수).
+    """)
 else:
     st.error("전체 시스템이 멈췄습니다. 데이터를 아예 가져오지 못했습니다.")
